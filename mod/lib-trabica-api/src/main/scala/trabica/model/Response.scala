@@ -17,9 +17,9 @@ object Response {
       case v: RequestVote =>
         Encoder[RequestVote].apply(v)
     }
-    
+
   given Decoder[Response] =
-    Decoder[Tag].at("header").at("tag").flatMap {
+    Decoder[Header].at("header").map(_.tag).flatMap {
       case Tag.Response.AppendEntries =>
         Decoder[AppendEntries].map(_.widen)
       case Tag.Response.RequestVote =>
@@ -27,7 +27,6 @@ object Response {
       case otherwise =>
         Decoder.failed(DecodingFailure(s"unrecognized response tag `$otherwise`", Nil))
     }
-    
 
   final case class AppendEntries(
     id: MessageId,
@@ -54,12 +53,11 @@ object Response {
 
     given Decoder[AppendEntries] =
       for {
-        id      <- Decoder[MessageId].at("id")
-        term    <- Decoder[Term].at("term")
+        header  <- Decoder[Header].at("header")
         success <- Decoder[Boolean].at("success")
       } yield AppendEntries(
-        id = id,
-        term = term,
+        id = header.id,
+        term = header.term,
         success = success,
       )
   }
@@ -89,12 +87,11 @@ object Response {
 
     given Decoder[RequestVote] =
       for {
-        id          <- Decoder[MessageId].at("id")
-        term        <- Decoder[Term].at("term")
+        header      <- Decoder[Header].at("header")
         voteGranted <- Decoder[Boolean].at("voteGranted")
       } yield RequestVote(
-        id = id,
-        term = term,
+        id = header.id,
+        term = header.term,
         voteGranted = voteGranted,
       )
   }

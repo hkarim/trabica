@@ -19,7 +19,7 @@ object Request {
     }
 
   given Decoder[Request] =
-    Decoder[Tag].at("header").at("tag").flatMap {
+    Decoder[Header].at("header").map(_.tag).flatMap {
       case Tag.Request.AppendEntries =>
         Decoder[AppendEntries].map(_.widen)
       case Tag.Request.RequestVote =>
@@ -61,16 +61,15 @@ object Request {
 
     given Decoder[AppendEntries] =
       for {
-        id                <- Decoder[MessageId].at("id")
-        term              <- Decoder[Term].at("term")
+        header            <- Decoder[Header].at("header")
         leaderId          <- Decoder[LeaderId].at("leaderId")
         prevLogIndex      <- Decoder[Index].at("prevLogIndex")
         prevLogTerm       <- Decoder[Term].at("prevLogTerm")
         entries           <- Decoder[Vector[Json]].at("entries")
         leaderCommitIndex <- Decoder[Index].at("leaderCommitIndex")
       } yield AppendEntries(
-        id = id,
-        term = term,
+        id = header.id,
+        term = header.term,
         leaderId = leaderId,
         prevLogIndex = prevLogIndex,
         prevLogTerm = prevLogTerm,
@@ -108,14 +107,13 @@ object Request {
 
     given Decoder[RequestVote] =
       for {
-        id           <- Decoder[MessageId].at("id")
-        term         <- Decoder[Term].at("term")
+        header       <- Decoder[Header].at("header")
         candidateId  <- Decoder[CandidateId].at("candidateId")
         lastLogIndex <- Decoder[Index].at("lastLogIndex")
         lastLogTerm  <- Decoder[Term].at("lastLogTerm")
       } yield RequestVote(
-        id = id,
-        term = term,
+        id = header.id,
+        term = header.term,
         candidateId = candidateId,
         lastLogIndex = lastLogIndex,
         lastLogTerm = lastLogTerm,

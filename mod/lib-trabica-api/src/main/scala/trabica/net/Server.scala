@@ -39,7 +39,10 @@ class Server(nodeContext: NodeContext) {
         }
         .through(text.utf8.encode)
         .through(client.writes)
-        .handleErrorWith(_ => Stream.empty) // handle errors of client sockets
+        .handleErrorWith { e =>
+          println(s"server stream error: ${e.getMessage}")
+          Stream.empty
+        }
     }.parJoin(100).compile.drain
   }
 }

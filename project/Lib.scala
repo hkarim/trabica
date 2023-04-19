@@ -2,7 +2,7 @@ import sbt.*
 
 object Lib {
   object Version {
-    val scala      = "3.3.0-RC3"
+    val scala      = "3.3.0-RC4"
     val service    = "0.1.0-SNAPSHOT"
     val config     = "1.4.2"
     val catsEffect = "3.5.0-RC3"

@@ -26,6 +26,7 @@ class NodeService(nodeContext: NodeContext) {
 
   def onRequestVote(request: Request.RequestVote): IO[Response.RequestVote] =
     for {
+      _     <- IO.println(request)
       id    <- nodeContext.messageId.getAndUpdate(_.increment)
       state <- nodeContext.nodeState.get
     } yield Response.RequestVote(
