@@ -14,7 +14,7 @@ class NodeService(nodeContext: NodeContext) {
         onRequestVote(rq)
     }
 
-  def onAppendEntries(request: Request.AppendEntries): IO[Response.AppendEntries] =
+  private def onAppendEntries(request: Request.AppendEntries): IO[Response.AppendEntries] =
     for {
       id    <- nodeContext.messageId.getAndUpdate(_.increment)
       state <- nodeContext.nodeState.get
@@ -24,15 +24,14 @@ class NodeService(nodeContext: NodeContext) {
       success = request.term == state.currentTerm,
     )
 
-  def onRequestVote(request: Request.RequestVote): IO[Response.RequestVote] =
+  private def onRequestVote(request: Request.RequestVote): IO[Response.RequestVote] =
     for {
-      _     <- IO.println(request)
       id    <- nodeContext.messageId.getAndUpdate(_.increment)
       state <- nodeContext.nodeState.get
     } yield Response.RequestVote(
       id = id,
       term = state.currentTerm,
-      voteGranted = request.term == state.currentTerm,
+      voteGranted = request.term == state.currentTerm
     )
 
 }

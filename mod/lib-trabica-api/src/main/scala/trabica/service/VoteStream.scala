@@ -24,6 +24,12 @@ class VoteStream(nodeContext: NodeContext) {
       socket <- retry(socketStream(address, signal), 0, 10)
     } yield socket
 
+  private def onVote(signal: SignallingRef[IO, Boolean], response: Response.RequestVote): IO[Unit] =
+    if response.voteGranted then
+      signal.set(true)
+    else
+      IO.unit
+
   private def retry[A](io: IO[A], initial: Int, max: Int): IO[A] =
     io.handleErrorWith {
       case e: java.io.IOException =>
@@ -47,11 +53,10 @@ class VoteStream(nodeContext: NodeContext) {
       new IllegalArgumentException(s"invalid port value for `$key`")
     )
 
-  private def pipe(signal: Signal[IO, Boolean], socket: Socket[IO]): IO[Unit] = {
+  private def pipe(signal: SignallingRef[IO, Boolean], socket: Socket[IO]): IO[Unit] = {
     val writes: IO[Unit] =
       Stream
         .awakeEvery[IO](2.seconds)
-        .evalTap(_ => IO.println("writes up ...."))
         .evalMap(_ => nodeContext.nodeState.get)
         .collect { case state: NodeState.Follower => state }
         .evalMap { state =>
@@ -69,11 +74,10 @@ class VoteStream(nodeContext: NodeContext) {
             )
           }
         }
-        .evalTap(r => IO.println(s"outbound: $r"))
+        .evalTap(r => IO.println(s"[vote::outbound]: $r"))
         .map(request => s"${request.asJson.noSpaces}\n")
         .through(text.utf8.encode)
         .through(socket.writes)
-        .interruptWhen(signal)
         .compile
         .drain
 
@@ -81,7 +85,7 @@ class VoteStream(nodeContext: NodeContext) {
       socket.reads
         .through(text.utf8.decode)
         .through(text.lines)
-        .evalTap(r => IO.println(s"inbound: $r"))
+        .evalTap(r => IO.println(s"[vote::inbound]: $r"))
         .evalMap { line =>
           IO.fromEither(parser.parse(line))
         }
@@ -89,7 +93,7 @@ class VoteStream(nodeContext: NodeContext) {
           IO.fromEither(json.as[Response])
         }
         .collect { case v: Response.RequestVote => v }
-        .interruptWhen(signal)
+        .evalMap(response => onVote(signal, response))
         .compile
         .drain
 
@@ -101,9 +105,10 @@ class VoteStream(nodeContext: NodeContext) {
     }
   }
 
-  private def socketStream(address: SocketAddress[Host], signal: Signal[IO, Boolean]): IO[Unit] =
+  private def socketStream(address: SocketAddress[Host], signal: SignallingRef[IO, Boolean]): IO[Unit] =
     Stream
       .resource(Network[IO].client(address))
+      .interruptWhen(signal)
       .evalMap { socket =>
         pipe(signal, socket)
       }

@@ -22,7 +22,7 @@ class Server(nodeContext: NodeContext) {
         .through(text.utf8.decode)
         .through(text.lines)
         .evalTap { line =>
-          IO.println(s"[request] $line")
+          IO.println(s"[server::request] $line")
         }
         .evalMap { line =>
           IO.fromEither(parser.parse(line))
@@ -35,7 +35,7 @@ class Server(nodeContext: NodeContext) {
           s"${message.asJson.noSpaces}\n"
         }
         .evalTap { line =>
-          IO.println(s"[response] $line")
+          IO.println(s"[server::response] $line")
         }
         .through(text.utf8.encode)
         .through(client.writes)
