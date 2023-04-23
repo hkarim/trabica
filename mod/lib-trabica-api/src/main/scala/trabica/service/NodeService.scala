@@ -21,7 +21,8 @@ class NodeService(nodeContext: NodeContext) {
       state <- nodeContext.nodeState.get
     } yield Response.AppendEntries(
       header = Header(
-        id = id,
+        peer = state.self,
+        messageId = id,
         term = state.currentTerm,
       ),
       success = request.header.term == state.currentTerm,
@@ -33,7 +34,8 @@ class NodeService(nodeContext: NodeContext) {
       state <- nodeContext.nodeState.get
     } yield Response.RequestVote(
       header = Header(
-        id = id,
+        peer = state.self,
+        messageId = id,
         term = state.currentTerm
       ),
       voteGranted = request.header.term == state.currentTerm

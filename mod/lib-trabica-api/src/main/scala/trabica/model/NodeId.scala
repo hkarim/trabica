@@ -1,7 +1,6 @@
 package trabica.model
 
-import scodec.Codec
-import scodec.codecs
+import scodec.{Codec, codecs}
 
 import java.util.UUID
 
@@ -13,5 +12,3 @@ object NodeId {
 
   def fromUUID(value: UUID): NodeId = value
 }
-
- 

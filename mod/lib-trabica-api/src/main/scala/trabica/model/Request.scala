@@ -18,17 +18,14 @@ object Request {
 
   final case class AppendEntries(
     header: Header,
-    leaderId: LeaderId,
     prevLogIndex: Index,
     prevLogTerm: Term,
     entries: ByteVector,
     leaderCommitIndex: Index,
   ) extends Request derives Codec
 
-
   final case class RequestVote(
     header: Header,
-    candidateId: CandidateId,
     lastLogIndex: Index,
     lastLogTerm: Term,
   ) extends Request derives Codec

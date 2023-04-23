@@ -1,11 +1,11 @@
 package trabica.context
 
-import cats.effect.std.{Supervisor, UUIDGen}
+import cats.effect.std.Supervisor
 import cats.effect.{IO, Ref}
 import com.typesafe.config.{Config, ConfigFactory}
-import trabica.model.{MessageId, NodeId, NodeState}
+import trabica.model.{CliCommand, MessageId, NodeState}
 import trabica.net.Server
-import trabica.service.VoteStream
+import trabica.service.{InitService, VoteStream}
 
 class DefaultNodeContext(
   val config: Config,
@@ -14,13 +14,12 @@ class DefaultNodeContext(
 ) extends NodeContext
 
 object DefaultNodeContext {
-  def run: IO[Unit] = {
-    val config: Config = ConfigFactory.load()
+  def run(command: CliCommand): IO[Unit] = {
+    val config: Config           = ConfigFactory.load()
+    val initService: InitService = InitService.instance(command)
     Supervisor[IO].use { supervisor =>
       for {
-        uuid <- UUIDGen.randomUUID[IO]
-        nodeId = NodeId.fromUUID(uuid)
-        nodeState <- Ref.of[IO, NodeState](NodeState.Follower.fresh(nodeId))
+        nodeState <- initService.state
         messageId <- Ref.of[IO, MessageId](MessageId.zero)
         nodeContext = new DefaultNodeContext(
           config = config,

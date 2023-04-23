@@ -3,6 +3,7 @@ package trabica.model
 import scodec.Codec
 
 final case class Header(
-  id: MessageId,
+  peer: Peer,
+  messageId: MessageId,
   term: Term,
 ) derives Codec

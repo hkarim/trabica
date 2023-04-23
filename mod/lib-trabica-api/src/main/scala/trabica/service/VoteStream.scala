@@ -63,20 +63,15 @@ class VoteStream(nodeContext: NodeContext) {
           nodeContext.messageId.getAndUpdate(_.increment).map { id =>
             Request.RequestVote(
               header = Header(
-                id = id,
+                peer = state.self,
+                messageId = id,
                 term = state.currentTerm,
-              ),
-              candidateId = CandidateId(
-                id = state.id,
-                ip = ip"127.0.0.0".asIpv4.get,
-                port = port"6666",
               ),
               lastLogIndex = Index.zero,
               lastLogTerm = state.currentTerm,
             )
           }
         }
-        .evalTap(_ => IO.println("emitting ..."))
         .through(StreamEncoder.many(Encoder[Request]).toPipeByte)
         .through(socket.writes)
         .compile
