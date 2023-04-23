@@ -3,11 +3,11 @@ package trabica.service
 import cats.effect.*
 import cats.effect.std.Supervisor
 import com.comcast.ip4s.*
-import io.circe.*
-import io.circe.syntax.*
 import fs2.*
 import fs2.concurrent.*
+import fs2.interop.scodec.{StreamDecoder, StreamEncoder}
 import fs2.io.net.{Network, Socket}
+import scodec.{Decoder, Encoder}
 import trabica.context.NodeContext
 import trabica.model.*
 
@@ -62,36 +62,29 @@ class VoteStream(nodeContext: NodeContext) {
         .evalMap { state =>
           nodeContext.messageId.getAndUpdate(_.increment).map { id =>
             Request.RequestVote(
-              id = id,
-              term = state.currentTerm,
+              header = Header(
+                id = id,
+                term = state.currentTerm,
+              ),
               candidateId = CandidateId(
                 id = state.id,
-                ip = "127.0.0.0",
-                port = 6666,
+                ip = ip"127.0.0.0".asIpv4.get,
+                port = port"6666",
               ),
               lastLogIndex = Index.zero,
               lastLogTerm = state.currentTerm,
             )
           }
         }
-        .evalTap(r => IO.println(s"[vote::outbound]: $r"))
-        .map(request => s"${request.asJson.noSpaces}\n")
-        .through(text.utf8.encode)
+        .evalTap(_ => IO.println("emitting ..."))
+        .through(StreamEncoder.many(Encoder[Request]).toPipeByte)
         .through(socket.writes)
         .compile
         .drain
 
     val reads: IO[Unit] =
       socket.reads
-        .through(text.utf8.decode)
-        .through(text.lines)
-        .evalTap(r => IO.println(s"[vote::inbound]: $r"))
-        .evalMap { line =>
-          IO.fromEither(parser.parse(line))
-        }
-        .evalMap { json =>
-          IO.fromEither(json.as[Response])
-        }
+        .through(StreamDecoder.many(Decoder[Response]).toPipeByte)
         .collect { case v: Response.RequestVote => v }
         .evalMap(response => onVote(signal, response))
         .compile

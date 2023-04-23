@@ -11,6 +11,7 @@ class NodeService(nodeContext: NodeContext) {
       case rq: Request.AppendEntries =>
         onAppendEntries(rq)
       case rq: Request.RequestVote =>
+        println(s"[NodeService::onRequest] $rq")
         onRequestVote(rq)
     }
 
@@ -19,9 +20,11 @@ class NodeService(nodeContext: NodeContext) {
       id    <- nodeContext.messageId.getAndUpdate(_.increment)
       state <- nodeContext.nodeState.get
     } yield Response.AppendEntries(
-      id = id,
-      term = state.currentTerm,
-      success = request.term == state.currentTerm,
+      header = Header(
+        id = id,
+        term = state.currentTerm,
+      ),
+      success = request.header.term == state.currentTerm,
     )
 
   private def onRequestVote(request: Request.RequestVote): IO[Response.RequestVote] =
@@ -29,9 +32,11 @@ class NodeService(nodeContext: NodeContext) {
       id    <- nodeContext.messageId.getAndUpdate(_.increment)
       state <- nodeContext.nodeState.get
     } yield Response.RequestVote(
-      id = id,
-      term = state.currentTerm,
-      voteGranted = request.term == state.currentTerm
+      header = Header(
+        id = id,
+        term = state.currentTerm
+      ),
+      voteGranted = request.header.term == state.currentTerm
     )
 
 }

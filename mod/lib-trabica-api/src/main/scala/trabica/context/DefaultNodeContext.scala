@@ -18,8 +18,8 @@ object DefaultNodeContext {
     val config: Config = ConfigFactory.load()
     Supervisor[IO].use { supervisor =>
       for {
-        uuid <- UUIDGen.randomString[IO]
-        nodeId = NodeId.fromString(uuid)
+        uuid <- UUIDGen.randomUUID[IO]
+        nodeId = NodeId.fromUUID(uuid)
         nodeState <- Ref.of[IO, NodeState](NodeState.Follower.fresh(nodeId))
         messageId <- Ref.of[IO, MessageId](MessageId.zero)
         nodeContext = new DefaultNodeContext(

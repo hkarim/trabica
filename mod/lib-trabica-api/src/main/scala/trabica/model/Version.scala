@@ -1,14 +1,13 @@
 package trabica.model
 
-import io.circe.{Decoder, Encoder}
+import scodec.*
 
-opaque type Version = String
+case class Version(
+  major: Byte,
+  minor: Byte,
+)
 
 object Version {
-  final val V1_0: Version = "1.0"
-
-  given Encoder[Version] = Encoder.encodeString
-  given Decoder[Version] = Decoder.decodeString
+  given Codec[Version] = (codecs.byte :: codecs.byte).as[Version]
+  final val V1_0: Version = Version(1, 0)
 }
-
-

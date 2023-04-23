@@ -1,122 +1,36 @@
 package trabica.model
 
-import io.circe.*
-import io.circe.syntax.*
+import scodec.*
+import scodec.bits.ByteVector
 
 sealed trait Request {
   def header: Header
-  def widen: Request = this
 }
 
 object Request {
 
-  given Encoder[Request] =
-    Encoder.instance {
-      case v: AppendEntries =>
-        Encoder[AppendEntries].apply(v)
-      case v: RequestVote =>
-        Encoder[RequestVote].apply(v)
-    }
-
-  given Decoder[Request] =
-    Decoder[Header].at("header").map(_.tag).flatMap {
-      case Tag.Request.AppendEntries =>
-        Decoder[AppendEntries].map(_.widen)
-      case Tag.Request.RequestVote =>
-        Decoder[RequestVote].map(_.widen)
-      case otherwise =>
-        Decoder.failed(DecodingFailure(s"unrecognized request tag `$otherwise`", Nil))
-    }
+  given Codec[Request] =
+    codecs
+      .discriminated[Request]
+      .by(Codec[Tag])
+      .caseP[AppendEntries](Tag.Request.AppendEntries) { case v: AppendEntries => v }(identity)(Codec[AppendEntries])
+      .caseP[RequestVote](Tag.Request.RequestVote) { case v: RequestVote => v }(identity)(Codec[RequestVote])
 
   final case class AppendEntries(
-    id: MessageId,
-    term: Term,
+    header: Header,
     leaderId: LeaderId,
     prevLogIndex: Index,
     prevLogTerm: Term,
-    entries: Vector[Json],
+    entries: ByteVector,
     leaderCommitIndex: Index,
-  ) extends Request {
-    val header: Header = Header(
-      id = id,
-      version = Version.V1_0,
-      tag = Tag.Request.AppendEntries,
-      term = term,
-    )
-  }
+  ) extends Request derives Codec
 
-  object AppendEntries {
-
-    given Encoder[AppendEntries] =
-      Encoder.instance { v =>
-        Json.obj(
-          "header"            -> v.header.asJson,
-          "leaderId"          -> v.leaderId.asJson,
-          "prevLogIndex"      -> v.prevLogIndex.asJson,
-          "prevLogTerm"       -> v.prevLogTerm.asJson,
-          "entries"           -> v.entries.asJson,
-          "leaderCommitIndex" -> v.leaderCommitIndex.asJson,
-        )
-      }
-
-    given Decoder[AppendEntries] =
-      for {
-        header            <- Decoder[Header].at("header")
-        leaderId          <- Decoder[LeaderId].at("leaderId")
-        prevLogIndex      <- Decoder[Index].at("prevLogIndex")
-        prevLogTerm       <- Decoder[Term].at("prevLogTerm")
-        entries           <- Decoder[Vector[Json]].at("entries")
-        leaderCommitIndex <- Decoder[Index].at("leaderCommitIndex")
-      } yield AppendEntries(
-        id = header.id,
-        term = header.term,
-        leaderId = leaderId,
-        prevLogIndex = prevLogIndex,
-        prevLogTerm = prevLogTerm,
-        entries = entries,
-        leaderCommitIndex = leaderCommitIndex,
-      )
-  }
 
   final case class RequestVote(
-    id: MessageId,
-    term: Term,
+    header: Header,
     candidateId: CandidateId,
     lastLogIndex: Index,
     lastLogTerm: Term,
-  ) extends Request {
-    val header: Header = Header(
-      id = id,
-      version = Version.V1_0,
-      tag = Tag.Request.RequestVote,
-      term = term,
-    )
-  }
+  ) extends Request derives Codec
 
-  object RequestVote {
-
-    given Encoder[RequestVote] =
-      Encoder.instance { v =>
-        Json.obj(
-          "header"       -> v.header.asJson,
-          "candidateId"  -> v.candidateId.asJson,
-          "lastLogIndex" -> v.lastLogIndex.asJson,
-          "lastLogTerm"  -> v.lastLogTerm.asJson,
-        )
-      }
-
-    given Decoder[RequestVote] =
-      for {
-        header       <- Decoder[Header].at("header")
-        candidateId  <- Decoder[CandidateId].at("candidateId")
-        lastLogIndex <- Decoder[Index].at("lastLogIndex")
-        lastLogTerm  <- Decoder[Term].at("lastLogTerm")
-      } yield RequestVote(
-        id = header.id,
-        term = header.term,
-        candidateId = candidateId,
-        lastLogIndex = lastLogIndex,
-        lastLogTerm = lastLogTerm,
-      )
-  }
 }

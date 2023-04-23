@@ -18,7 +18,7 @@ object Lib {
   val circe: List[ModuleID] = List(
     "io.circe" %% "circe-core"    % Version.circe,
     "io.circe" %% "circe-parser"  % Version.circe,
-    "io.circe" %% "circe-literal"  % Version.circe
+    "io.circe" %% "circe-literal" % Version.circe
   )
 
   val catsEffect: List[ModuleID] = List(
@@ -26,8 +26,10 @@ object Lib {
   )
 
   val fs2: List[ModuleID] = List(
-    "co.fs2" %% "fs2-core" % Version.fs2,
-    "co.fs2" %% "fs2-io"   % Version.fs2,
+    "co.fs2" %% "fs2-core"      % Version.fs2,
+    "co.fs2" %% "fs2-io"        % Version.fs2,
+    "co.fs2" %% "fs2-scodec"    % Version.fs2,
+    "co.fs2" %% "fs2-protocols" % Version.fs2,
   )
 
   val decline: List[ModuleID] = List(

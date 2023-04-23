@@ -1,32 +1,16 @@
 package trabica.model
 
-import io.circe.*
-import io.circe.syntax.*
+import fs2.protocols.*
+import com.comcast.ip4s.*
+import scodec.Codec
 
 case class CandidateId(
   id: NodeId,
-  ip: String,
-  port: Int,
+  ip: Ipv4Address,
+  port: Port,
 )
 
 object CandidateId {
-  given Encoder[CandidateId] =
-    Encoder.instance { v =>
-      Json.obj(
-        "id"   -> v.id.asJson,
-        "ip"   -> v.ip.asJson,
-        "port" -> v.port.asJson,
-      )
-    }
-
-  given Decoder[CandidateId] =
-    for {
-      id   <- Decoder[NodeId].at("id")
-      ip   <- Decoder[String].at("ip")
-      port <- Decoder[Int].at("port")
-    } yield CandidateId(
-      id = id,
-      ip = ip,
-      port = port,
-    )
+  given Codec[CandidateId] =
+    (Codec[NodeId] :: Ip4sCodecs.ipv4 :: Ip4sCodecs.port).as[CandidateId]
 }

@@ -33,7 +33,6 @@ lazy val `lib-trabica-api` = project
   .settings(
     libraryDependencies ++=
       Lib.config ++
-        Lib.circe ++
         Lib.catsEffect ++
         Lib.fs2
   )

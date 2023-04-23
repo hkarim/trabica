@@ -1,15 +1,15 @@
 package trabica.model
 
-import io.circe.*
+import scodec.Codec
 
 opaque type Index = Long
 
 object Index {
-  given Encoder[Index] = Encoder.encodeLong
-  given Decoder[Index] = Decoder.decodeLong
+  
+  given Codec[Index] = scodec.codecs.uint32
 
-  final val zero : Index = 0
-  final val one : Index = 1
+  final val zero : Index = 0L
+  final val one : Index = 1L
 
   extension (self: Index) {
     def increment: Index = self + 1

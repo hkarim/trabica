@@ -1,12 +1,11 @@
 package trabica.model
 
-import io.circe.*
+import scodec.Codec
 
-opaque type Term = Int
+
+opaque type Term = Long
 
 object Term {
-  given Encoder[Term] = Encoder.encodeInt
-  given Decoder[Term] = Decoder.decodeInt
-  
-  final val zero: Term = 0
+  given Codec[Term] = scodec.codecs.uint32
+  final val zero: Term = 0L
 }

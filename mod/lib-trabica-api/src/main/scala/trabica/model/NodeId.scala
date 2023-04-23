@@ -1,13 +1,17 @@
 package trabica.model
 
-import io.circe.{Decoder, Encoder}
+import scodec.Codec
+import scodec.codecs
 
-opaque type NodeId = String
+import java.util.UUID
+
+opaque type NodeId = UUID
 
 object NodeId {
-  given Encoder[NodeId] = Encoder.encodeString
-  given Decoder[NodeId] = Decoder.decodeString
-  def fromString(value: String): NodeId = value
+
+  given Codec[NodeId] = codecs.uuid
+
+  def fromUUID(value: UUID): NodeId = value
 }
 
  

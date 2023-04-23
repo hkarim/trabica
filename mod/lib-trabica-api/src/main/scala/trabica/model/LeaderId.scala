@@ -1,28 +1,18 @@
 package trabica.model
 
-import io.circe.*
-import io.circe.syntax.*
+import fs2.protocols.*
+import com.comcast.ip4s.*
+import scodec.Codec
 
 final case class LeaderId(
-  ip: String,
-  port: Int,
+  id: NodeId,
+  ip: Ipv4Address,
+  port: Port,
 )
 
 object LeaderId {
-  given Encoder[LeaderId] =
-    Encoder.instance { v =>
-      Json.obj(
-        "ip"   -> v.ip.asJson,
-        "port" -> v.port.asJson,
-      )
-    }
 
-  given Decoder[LeaderId] =
-    for {
-      ip   <- Decoder[String].at("ip")
-      port <- Decoder[Int].at("port")
-    } yield LeaderId(
-      ip = ip,
-      port = port,
-    )
+  given Codec[LeaderId] =
+    (Codec[NodeId] :: Ip4sCodecs.ipv4 :: Ip4sCodecs.port).as[LeaderId]
+
 }
