@@ -9,27 +9,31 @@ import trabica.context.NodeContext
 import trabica.model.{Request, Response}
 import trabica.service.NodeService
 
-class Server(nodeContext: NodeContext) {
+class Server(context: NodeContext) {
 
-  private final val nodeService: NodeService = NodeService.instance(nodeContext)
+  private final val nodeService: NodeService = NodeService.instance(context)
 
   def run: IO[Unit] =
-    nodeContext.nodeState.get.flatMap { nodeState =>
-      val ip   = Some(nodeState.self.ip)
-      val port = Some(nodeState.self.port)
-      Network[IO].server(ip, port).map { client =>
-        client.reads
-          .through(StreamDecoder.many(Decoder[Request]).toPipeByte)
-          .evalMap(nodeService.onRequest)
-          .through(StreamEncoder.many(Encoder[Response]).toPipeByte)
-          .through(client.writes)
-          .handleErrorWith { e =>
-            println(s"server stream error: ${e.getMessage}")
-            e.printStackTrace()
-            Stream.empty
-          }
-      }.parJoinUnbounded.compile.drain
-    }
+    IO.println("[Server] startup") >>
+      context.nodeState.get.flatMap { nodeState =>
+        val ip   = Some(nodeState.self.ip)
+        val port = Some(nodeState.self.port)
+        Network[IO].server(ip, port).map { client =>
+          client.reads
+            .through(StreamDecoder.many(Decoder[Request]).toPipeByte)
+            .evalMap(nodeService.onRequest)
+            .through(StreamEncoder.many(Encoder[Response]).toPipeByte)
+            .through(client.writes)
+            .handleErrorWith { e =>
+              println(s"server stream error: ${e.getMessage}")
+              e.printStackTrace()
+              Stream.empty
+            }
+        }
+          .parJoinUnbounded
+          .compile
+          .drain
+      }
 
 }
 

@@ -21,7 +21,7 @@ class VoteStream(nodeContext: NodeContext) {
       peerIp   <- host("trabica.peer.ip")
       peerPort <- port("trabica.peer.port")
       address = SocketAddress(peerIp, peerPort)
-      socket <- retry(socketStream(address, signal), 0, 10)
+      socket <- Resilient.retry(socketStream(address, signal), 0, 10)
     } yield socket
 
   private def onVote(signal: SignallingRef[IO, Boolean], response: Response.RequestVote): IO[Unit] =
@@ -30,19 +30,7 @@ class VoteStream(nodeContext: NodeContext) {
     else
       IO.unit
 
-  private def retry[A](io: IO[A], initial: Int, max: Int): IO[A] =
-    io.handleErrorWith {
-      case e: java.io.IOException =>
-        if initial <= max then {
-          IO.println("retrying .. ") *>
-            IO.sleep(3.seconds) *>
-            retry(io, initial + 1, max)
-        } else {
-          IO.println("giving up") *>
-            IO.raiseError(e)
-        }
-    }
-
+  
   private def host(key: String): IO[Host] =
     IO.fromOption(Host.fromString(nodeContext.config.getString(key)))(
       new IllegalArgumentException(s"invalid host value for `$key`")

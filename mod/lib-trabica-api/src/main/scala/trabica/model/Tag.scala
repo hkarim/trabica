@@ -11,11 +11,13 @@ object Tag {
   object Request {
     final val AppendEntries: Tag = 1 << 0
     final val RequestVote: Tag   = 1 << 1
+    final val Join: Tag          = 1 << 2
   }
 
   object Response {
     final val AppendEntries: Tag = 1 << 16 | 1 << 0
     final val RequestVote: Tag   = 1 << 16 | 1 << 1
+    final val Join: Tag          = 1 << 16 | 1 << 2
   }
 
 }
