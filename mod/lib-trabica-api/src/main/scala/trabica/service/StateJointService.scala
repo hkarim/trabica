@@ -2,20 +2,28 @@ package trabica.service
 
 import cats.effect.IO
 import trabica.context.NodeContext
-import trabica.model.{Header, NodeState, Request, Response}
+import trabica.model.{Header, NodeError, NodeState, Request, Response}
 
 class StateJointService(context: NodeContext) {
 
-  def onRequest(state: NodeState.Joint, request: Request): IO[Response] =
-    request match {
-      case v: Request.AppendEntries =>
-        onAppendEntries(state, v)
-      case v: Request.RequestVote =>
-        onRequestVote(state, v)
-      case _: Request.Join =>
-        onJoin(state)
-    }
+  private final val logger = scribe.cats[IO]
 
+  def onRequest(request: Request): IO[Response] =
+    logger.debug(s"$request") >> {
+      context.nodeState.get.flatMap {
+        case state: NodeState.Joint =>
+          request match {
+            case v: Request.AppendEntries =>
+              onAppendEntries(state, v)
+            case v: Request.RequestVote =>
+              onRequestVote(state, v)
+            case _: Request.Join =>
+              onJoin(state)
+          }
+        case state =>
+          IO.raiseError(NodeError.InvalidNodeState(state))
+      }
+    }
   private def onAppendEntries(state: NodeState.Joint, request: Request.AppendEntries): IO[Response.AppendEntries] =
     ???
 

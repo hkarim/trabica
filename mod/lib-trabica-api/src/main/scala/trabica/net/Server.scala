@@ -23,13 +23,18 @@ class Server(context: NodeContext) {
         Network[IO].server(ip, port).map { client =>
           client.reads
             .through(StreamDecoder.many(Decoder[Request]).toPipeByte)
-            .evalMap(routerService.onRequest)
+            .evalMap { request =>
+              routerService
+                .onRequest(request)
+            // .timeout(100.milliseconds)
+            }
             .through(StreamEncoder.many(Encoder[Response]).toPipeByte)
             .through(client.writes)
             .handleErrorWith { e =>
               Stream.eval(logger.error(s"server stream error: ${e.getMessage}", e)) >>
                 Stream.empty
             }
+        // .timeout(100.milliseconds)
         }
           .parJoinUnbounded
           .compile

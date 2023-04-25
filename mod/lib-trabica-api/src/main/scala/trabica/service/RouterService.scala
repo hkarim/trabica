@@ -6,8 +6,6 @@ import trabica.model.*
 
 class RouterService(context: NodeContext) {
 
-  private final val logger = scribe.cats[IO]
-
   private val stateOrphanService: StateOrphanService =
     StateOrphanService.instance(context)
 
@@ -27,23 +25,20 @@ class RouterService(context: NodeContext) {
     StateJointService.instance(context)
 
   def onRequest(request: Request): IO[Response] =
-    logger.debug(s"$request") >> {
-      context.nodeState.get.flatMap {
-        case v: NodeState.Orphan =>
-          stateOrphanService.onRequest(v, request)
-        case v: NodeState.NonVoter =>
-          stateNonVoterService.onRequest(v, request)
-        case v: NodeState.Follower =>
-          stateFollowerService.onRequest(v, request)
-        case v: NodeState.Candidate =>
-          stateCandidateService.onRequest(v, request)
-        case v: NodeState.Leader =>
-          stateLeaderService.onRequest(v, request)
-        case v: NodeState.Joint =>
-          stateJointService.onRequest(v, request)
-      }
+    context.nodeState.get.flatMap {
+      case v: NodeState.Orphan =>
+        stateOrphanService.onRequest(request)
+      case v: NodeState.NonVoter =>
+        stateNonVoterService.onRequest(request)
+      case v: NodeState.Follower =>
+        stateFollowerService.onRequest(request)
+      case v: NodeState.Candidate =>
+        stateCandidateService.onRequest(request)
+      case v: NodeState.Leader =>
+        stateLeaderService.onRequest(request)
+      case v: NodeState.Joint =>
+        stateJointService.onRequest(request)
     }
-
 }
 
 object RouterService {

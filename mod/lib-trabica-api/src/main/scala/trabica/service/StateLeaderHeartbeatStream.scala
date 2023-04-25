@@ -1,7 +1,7 @@
 package trabica.service
 
 import cats.effect.*
-import cats.effect.std.Supervisor
+import cats.effect.std.{Queue, Supervisor}
 import cats.syntax.all.*
 import com.comcast.ip4s.{Host, SocketAddress}
 import fs2.*
@@ -10,7 +10,6 @@ import fs2.io.net.{Network, Socket}
 import scodec.{Decoder, Encoder}
 import trabica.context.NodeContext
 import trabica.model.*
-
 import scala.concurrent.duration.*
 
 object StateLeaderHeartbeatStream {
@@ -18,31 +17,37 @@ object StateLeaderHeartbeatStream {
   private final val logger = scribe.cats[IO]
 
   def run(context: NodeContext, state: NodeState.Leader, supervisor: Supervisor[IO]): IO[Unit] =
-    logger.info("starting up heartbeat stream") >>
+    logger.info("restarting up heartbeat stream") >>
       state.peers.toVector.traverse { peer =>
         socketStream(context, SocketAddress(peer.ip, peer.port)).supervise(supervisor)
       }.void
 
   private def onResponse(context: NodeContext, response: Response.AppendEntries): IO[Unit] =
-    context.nodeState.get.flatMap { state =>
-      if state.currentTerm < response.header.term then
-        context.events.offer(
-          Event.NodeStateChangedEvent(
-            NodeState.Follower(
-              id = state.id,
-              self = state.self,
-              peers = state.peers,
-              leader = response.header.peer,
-              currentTerm = response.header.term,
-              votedFor = None,
-              commitIndex = state.commitIndex,
-              lastApplied = state.lastApplied,
+    for {
+      state <- context.nodeState.get
+      _ <-
+        if state.currentTerm < response.header.term then {
+          for {
+            heartbeat <- Queue.unbounded[IO, Unit]
+            _ <- context.events.offer(
+              Event.NodeStateChangedEvent(
+                NodeState.Follower(
+                  id = state.id,
+                  self = state.self,
+                  peers = state.peers,
+                  leader = response.header.peer,
+                  currentTerm = response.header.term,
+                  votedFor = None,
+                  commitIndex = state.commitIndex,
+                  lastApplied = state.lastApplied,
+                  heartbeat = heartbeat,
+                )
+              )
             )
-          )
-        )
-      else
-        IO.unit
-    }
+          } yield ()
+        } else IO.unit
+
+    } yield ()
 
   private def pipe(context: NodeContext, socket: Socket[IO]): IO[Unit] = {
     val writes: IO[Unit] =
@@ -95,5 +100,11 @@ object StateLeaderHeartbeatStream {
       }
       .compile
       .drain
+      .onError { e =>
+        logger.error("heartbeat stream failed", e)
+      }
+      .onCancel {
+        logger.debug("heartbeat stream canceled")
+      }
 
 }

@@ -43,7 +43,7 @@ class VoteStream(nodeContext: NodeContext) {
   private def pipe(signal: SignallingRef[IO, Boolean], socket: Socket[IO]): IO[Unit] = {
     val writes: IO[Unit] =
       Stream
-        .awakeEvery[IO](2.seconds)
+        .fixedRateStartImmediately[IO](2.seconds)
         .evalMap(_ => nodeContext.nodeState.get)
         .collect { case state: NodeState.Follower => state }
         .evalMap { state =>

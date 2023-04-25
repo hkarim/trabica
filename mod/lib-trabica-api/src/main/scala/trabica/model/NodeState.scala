@@ -1,5 +1,8 @@
 package trabica.model
 
+import cats.effect.IO
+import cats.effect.std.Queue
+
 enum NodeStateTag {
   case Orphan
   case NonVoter
@@ -56,6 +59,7 @@ object NodeState {
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
+    heartbeat: Queue[IO, Unit],
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Follower
   }

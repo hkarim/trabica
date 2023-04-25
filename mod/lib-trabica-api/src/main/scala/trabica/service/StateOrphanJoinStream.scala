@@ -1,7 +1,7 @@
 package trabica.service
 
 import cats.effect.*
-import cats.effect.std.Supervisor
+import cats.effect.std.{Queue, Supervisor}
 import cats.syntax.all.*
 import com.comcast.ip4s.{Host, SocketAddress}
 import fs2.Stream
@@ -29,17 +29,23 @@ object StateOrphanJoinStream {
       oldState <- context.nodeState.get
       _ <- response.status match {
         case JoinStatus.Accepted =>
-          val newState = NodeState.Follower(
-            id = oldState.id,
-            self = oldState.self,
-            peers = oldState.peers + response.header.peer,
-            leader = response.header.peer,
-            currentTerm = response.header.term,
-            votedFor = None,
-            commitIndex = Index.zero,
-            lastApplied = Index.zero,
-          )
-          context.events.offer(Event.NodeStateChangedEvent(newState))
+          for {
+            heartbeat <- Queue.unbounded[IO, Unit]
+            newState = NodeState.Follower(
+              id = oldState.id,
+              self = oldState.self,
+              peers = oldState.peers + response.header.peer,
+              leader = response.header.peer,
+              currentTerm = response.header.term,
+              votedFor = None,
+              commitIndex = Index.zero,
+              lastApplied = Index.zero,
+              heartbeat = heartbeat,
+            )
+            _ <- logger.info(s"joining cluster response `accepted` through peer ${response.header.peer}")
+            _ <- context.events.offer(Event.NodeStateChangedEvent(newState))
+          } yield ()
+
         case JoinStatus.UnknownLeader(knownPeers) =>
           val newState = NodeState.Orphan(
             id = oldState.id,
@@ -50,7 +56,8 @@ object StateOrphanJoinStream {
             commitIndex = Index.zero,
             lastApplied = Index.zero,
           )
-          context.events.offer(Event.NodeStateChangedEvent(newState))
+          logger.info(s"joining cluster response `unknown-leader`, using known peers of peer ${response.header.peer}") >>
+            context.events.offer(Event.NodeStateChangedEvent(newState))
         case JoinStatus.Forward(leader) =>
           val newState = NodeState.Orphan(
             id = oldState.id,
@@ -61,16 +68,15 @@ object StateOrphanJoinStream {
             commitIndex = Index.zero,
             lastApplied = Index.zero,
           )
-          context.events.offer(Event.NodeStateChangedEvent(newState))
+          logger.info(s"joining cluster response `forward`, through peer ${response.header.peer}") >>
+            context.events.offer(Event.NodeStateChangedEvent(newState))
       }
-
-      _ <- logger.info(s"joining cluster through peer ${response.header.peer}")
     } yield ()
 
   private def communicate(context: NodeContext, socket: Socket[IO]): IO[Unit] = {
     val writes: IO[Unit] =
       Stream
-        .awakeEvery[IO](2.seconds)
+        .fixedRateStartImmediately[IO](2.seconds)
         .evalTap(_ => logger.debug("wake up"))
         .evalMap(_ => context.nodeState.get)
         .evalMap { state =>

@@ -6,16 +6,24 @@ import trabica.model.*
 
 class StateLeaderService(context: NodeContext) {
 
-  def onRequest(state: NodeState.Leader, request: Request): IO[Response] =
-    request match {
-      case v: Request.AppendEntries =>
-        onAppendEntries(state, v)
-      case v: Request.RequestVote =>
-        onRequestVote(state, v)
-      case v: Request.Join =>
-        onJoin(state, v)
-    }
+  private final val logger = scribe.cats[IO]
 
+  def onRequest(request: Request): IO[Response] =
+    logger.debug(s"$request") >> {
+      context.nodeState.get.flatMap {
+        case state: NodeState.Leader =>
+          request match {
+            case v: Request.AppendEntries =>
+              onAppendEntries(state, v)
+            case v: Request.RequestVote =>
+              onRequestVote(state, v)
+            case v: Request.Join =>
+              onJoin(state, v)
+          }
+        case state =>
+          IO.raiseError(NodeError.InvalidNodeState(state))
+      }
+    }
   private def onAppendEntries(state: NodeState.Leader, request: Request.AppendEntries): IO[Response.AppendEntries] =
     ???
 

@@ -2,18 +2,27 @@ package trabica.service
 
 import cats.effect.IO
 import trabica.context.NodeContext
-import trabica.model.{Header, NodeState, Request, Response}
+import trabica.model.*
 
 class StateOrphanService(context: NodeContext) {
 
-  def onRequest(state: NodeState.Orphan, request: Request): IO[Response] =
-    request match {
-      case v: Request.AppendEntries =>
-        onAppendEntries(state, v)
-      case v: Request.RequestVote =>
-        onRequestVote(state, v)
-      case _: Request.Join =>
-        onJoin(state)
+  private final val logger = scribe.cats[IO]
+
+  def onRequest(request: Request): IO[Response] =
+    logger.debug(s"$request") >> {
+      context.nodeState.get.flatMap {
+        case state: NodeState.Orphan =>
+          request match {
+            case v: Request.AppendEntries =>
+              onAppendEntries(state, v)
+            case v: Request.RequestVote =>
+              onRequestVote(state, v)
+            case _: Request.Join =>
+              onJoin(state)
+          }
+        case state =>
+          IO.raiseError(NodeError.InvalidNodeState(state))
+      }
     }
 
   private def onAppendEntries(state: NodeState.Orphan, request: Request.AppendEntries): IO[Response.AppendEntries] =

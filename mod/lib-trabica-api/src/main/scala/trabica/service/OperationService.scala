@@ -43,7 +43,7 @@ object OperationService {
     ???
 
   private def follower(context: NodeContext, state: NodeState.Follower, supervisor: Supervisor[IO]): IO[Unit] =
-    ???
+    StateFollowerMonitorStream.run(context, state, supervisor)
 
   private def candidate(context: NodeContext, state: NodeState.Candidate, supervisor: Supervisor[IO]): IO[Unit] =
     ???

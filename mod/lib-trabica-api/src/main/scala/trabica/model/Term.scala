@@ -14,5 +14,14 @@ object Term {
   extension (self: Term) {
     @targetName("lt")
     def <(that: Term): Boolean = self < that
+
+    @targetName("le")
+    def <=(that: Term): Boolean = self <= that
+
+    @targetName("gt")
+    def >(that: Term): Boolean = self > that
+
+    @targetName("ge")
+    def >=(that: Term): Boolean = self >= that
   }
 }
