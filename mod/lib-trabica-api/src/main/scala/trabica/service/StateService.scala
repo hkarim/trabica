@@ -6,11 +6,15 @@ import trabica.model.*
 
 object StateService {
 
+  private final val logger = scribe.cats[IO]
+
   def state(command: CliCommand): IO[Ref[IO, NodeState]] = command match {
     case v: CliCommand.Bootstrap =>
-      bootstrap(v)
+      logger.debug("initiating node state in bootstrap mode") >>
+        bootstrap(v)
     case v: CliCommand.Join =>
-      join(v)
+      logger.debug("initiating node state in join mode") >>
+        join(v)
   }
 
   private def bootstrap(command: CliCommand.Bootstrap): IO[Ref[IO, NodeState]] = for {
@@ -36,7 +40,7 @@ object StateService {
 
   private def join(command: CliCommand.Join): IO[Ref[IO, NodeState]] = for {
     uuid <- UUIDGen.randomUUID[IO]
-    id   = NodeId.fromUUID(uuid)
+    id = NodeId.fromUUID(uuid)
     nodeState <- Ref.of[IO, NodeState](
       NodeState.Orphan(
         id = id,
@@ -59,4 +63,3 @@ object StateService {
   } yield nodeState
 
 }
-

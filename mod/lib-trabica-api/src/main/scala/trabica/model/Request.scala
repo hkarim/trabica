@@ -21,7 +21,7 @@ object Request {
     header: Header,
     prevLogIndex: Index,
     prevLogTerm: Term,
-    entries: ByteVector,
+    entries: Vector[ByteVector],
     leaderCommitIndex: Index,
   ) extends Request derives Codec
 
@@ -30,7 +30,7 @@ object Request {
     lastLogIndex: Index,
     lastLogTerm: Term,
   ) extends Request derives Codec
-  
+
   final case class Join(
     header: Header
   ) extends Request derives Codec

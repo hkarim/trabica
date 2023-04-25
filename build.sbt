@@ -35,7 +35,8 @@ lazy val `lib-trabica-api` = project
       Lib.config ++
         Lib.catsEffect ++
         Lib.fs2 ++
-        Lib.decline
+        Lib.decline ++
+        Lib.scribe
   )
 
 lazy val `node-template` = project

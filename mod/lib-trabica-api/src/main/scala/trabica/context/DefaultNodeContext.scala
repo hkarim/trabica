@@ -16,9 +16,18 @@ class DefaultNodeContext(
 ) extends NodeContext
 
 object DefaultNodeContext {
-  def run(command: CliCommand): IO[Unit] = {
-    val config: Config = ConfigFactory.load()
+  private def logging: IO[Unit] = IO.delay {
+    scribe.Logger.root
+      .clearHandlers()
+      .clearModifiers()
+      .withHandler(minimumLevel = Some(scribe.Level.Debug))
+      .replace()
+  }.void
+
+  def run(command: CliCommand): IO[Unit] =
     for {
+      _         <- logging
+      config    <- IO.blocking(ConfigFactory.load())
       nodeState <- StateService.state(command)
       messageId <- Ref.of[IO, MessageId](MessageId.zero)
       events    <- Queue.unbounded[IO, Event]
@@ -33,5 +42,4 @@ object DefaultNodeContext {
       _ <- OperationService.run(nodeContext)
     } yield ()
 
-  }
 }

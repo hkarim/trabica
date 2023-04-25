@@ -9,6 +9,8 @@ import trabica.net.Server
 
 object OperationService {
 
+  private final val logger = scribe.cats[IO]
+
   def run(context: NodeContext): IO[Unit] =
     Supervisor[IO].use { supervisor =>
       for {
@@ -35,7 +37,7 @@ object OperationService {
     }.void
 
   private def orphan(context: NodeContext, state: NodeState.Orphan, supervisor: Supervisor[IO]): IO[Unit] =
-    JoinStream.run(context, state, supervisor)
+    StateOrphanJoinStream.run(context, state, supervisor)
 
   private def nonVoter(context: NodeContext, state: NodeState.NonVoter, supervisor: Supervisor[IO]): IO[Unit] =
     ???
@@ -47,18 +49,18 @@ object OperationService {
     ???
 
   private def leader(context: NodeContext, state: NodeState.Leader, supervisor: Supervisor[IO]): IO[Unit] =
-    HeartbeatStream.run(context, state, supervisor)
+    StateLeaderHeartbeatStream.run(context, state, supervisor)
 
   private def joint(context: NodeContext, state: NodeState.Joint, supervisor: Supervisor[IO]): IO[Unit] =
     ???
 
   private def eventStream(context: NodeContext, supervisor: Supervisor[IO]): IO[Unit] =
-    IO.println("[OperationService::eventStream] startup") >>
+    logger.info("starting up event stream") >>
       Stream
         .fromQueueUnterminated(context.events)
-        .evalTap(event => IO.println(s"[OperationService::eventStream] $event"))
+        .evalTap(event => logger.debug(s"$event"))
         .evalMap {
-          case Event.NodeStateEvent(nodeState) =>
+          case Event.NodeStateChangedEvent(nodeState) =>
             for {
               _ <- context.interrupt.set(true)
               _ <- context.nodeState.set(nodeState)

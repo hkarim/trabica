@@ -7,33 +7,34 @@ import fs2.io.net.Network
 import scodec.{Decoder, Encoder}
 import trabica.context.NodeContext
 import trabica.model.{Request, Response}
-import trabica.service.NodeService
+import trabica.service.RouterService
 
 class Server(context: NodeContext) {
 
-  private final val nodeService: NodeService = NodeService.instance(context)
+  private final val logger = scribe.cats[IO]
+
+  private final val routerService: RouterService = RouterService.instance(context)
 
   def run: IO[Unit] =
-    IO.println("[Server] startup") >>
-      context.nodeState.get.flatMap { nodeState =>
-        val ip   = Some(nodeState.self.ip)
-        val port = Some(nodeState.self.port)
+    context.nodeState.get.flatMap { nodeState =>
+      val ip   = Some(nodeState.self.ip)
+      val port = Some(nodeState.self.port)
+      logger.info(s"starting up main communication server on ip: ${nodeState.self.ip}, port: ${nodeState.self.port}") >>
         Network[IO].server(ip, port).map { client =>
           client.reads
             .through(StreamDecoder.many(Decoder[Request]).toPipeByte)
-            .evalMap(nodeService.onRequest)
+            .evalMap(routerService.onRequest)
             .through(StreamEncoder.many(Encoder[Response]).toPipeByte)
             .through(client.writes)
             .handleErrorWith { e =>
-              println(s"server stream error: ${e.getMessage}")
-              e.printStackTrace()
-              Stream.empty
+              Stream.eval(logger.error(s"server stream error: ${e.getMessage}", e)) >>
+                Stream.empty
             }
         }
           .parJoinUnbounded
           .compile
           .drain
-      }
+    }
 
 }
 

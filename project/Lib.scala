@@ -9,6 +9,7 @@ object Lib {
     val circe      = "0.14.5"
     val fs2        = "3.7.0-RC4"
     val decline    = "2.4.1"
+    val scribe     = "3.11.1"
   }
 
   val config: List[ModuleID] = List(
@@ -34,6 +35,10 @@ object Lib {
 
   val decline: List[ModuleID] = List(
     "com.monovore" %% "decline-effect" % Version.decline
+  )
+
+  val scribe: List[ModuleID] = List(
+    "com.outr" %% "scribe-cats" % Version.scribe
   )
 
 }

@@ -1,5 +1,14 @@
 package trabica.model
 
+enum NodeStateTag {
+  case Orphan
+  case NonVoter
+  case Follower
+  case Candidate
+  case Leader
+  case Joint
+}
+
 sealed trait NodeState {
   def id: NodeId
   def self: Peer
@@ -8,6 +17,7 @@ sealed trait NodeState {
   def votedFor: Option[Peer]
   def commitIndex: Index
   def lastApplied: Index
+  def tag: NodeStateTag
 }
 
 object NodeState {
@@ -20,27 +30,35 @@ object NodeState {
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
-  ) extends NodeState
+  ) extends NodeState {
+    val tag: NodeStateTag = NodeStateTag.Orphan
+  }
 
   final case class NonVoter(
     id: NodeId,
     self: Peer,
     peers: Set[Peer],
+    leader: Option[Peer],
     currentTerm: Term,
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
-  ) extends NodeState
+  ) extends NodeState {
+    val tag: NodeStateTag = NodeStateTag.NonVoter
+  }
 
   final case class Follower(
     id: NodeId,
     self: Peer,
     peers: Set[Peer],
+    leader: Peer,
     currentTerm: Term,
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
-  ) extends NodeState
+  ) extends NodeState {
+    val tag: NodeStateTag = NodeStateTag.Follower
+  }
 
   final case class Candidate(
     id: NodeId,
@@ -50,7 +68,9 @@ object NodeState {
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
-  ) extends NodeState
+  ) extends NodeState {
+    val tag: NodeStateTag = NodeStateTag.Candidate
+  }
 
   final case class Leader(
     id: NodeId,
@@ -62,15 +82,20 @@ object NodeState {
     lastApplied: Index,
     nextIndex: Index,
     matchIndex: Index,
-  ) extends NodeState
+  ) extends NodeState {
+    val tag: NodeStateTag = NodeStateTag.Leader
+  }
 
   final case class Joint(
     id: NodeId,
     self: Peer,
     peers: Set[Peer],
+    leader: Option[Peer],
     currentTerm: Term,
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
-  ) extends NodeState
+  ) extends NodeState {
+    val tag: NodeStateTag = NodeStateTag.Joint
+  }
 }

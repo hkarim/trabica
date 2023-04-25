@@ -26,8 +26,24 @@ object Response {
     voteGranted: Boolean,
   ) extends Response derives Codec
 
+  sealed trait JoinStatus
+  object JoinStatus {
+    given Codec[JoinStatus] =
+      codecs
+        .discriminated[JoinStatus]
+        .by(codecs.uint8)
+        .caseP[Accepted.type](0) { case Accepted => Accepted }(identity)(codecs.provide(Accepted))
+        .caseP[UnknownLeader](1) { case v: UnknownLeader => v }(identity)(Codec[UnknownLeader])
+        .caseP[Forward](2) { case v: Forward => v }(identity)(Codec[Forward])
+
+    case object Accepted                               extends JoinStatus
+    case class UnknownLeader(knownPeers: Vector[Peer]) extends JoinStatus derives Codec
+    case class Forward(leader: Peer)                   extends JoinStatus derives Codec
+  }
+
   final case class Join(
     header: Header,
+    status: JoinStatus,
   ) extends Response derives Codec
 
 }

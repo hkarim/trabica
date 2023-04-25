@@ -1,6 +1,7 @@
 package trabica.service
 
 import cats.effect.IO
+
 import scala.concurrent.duration.*
 
 object Resilient {
@@ -17,6 +18,5 @@ object Resilient {
             IO.raiseError(e)
         }
     }
-
 
 }

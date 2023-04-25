@@ -30,7 +30,6 @@ class VoteStream(nodeContext: NodeContext) {
     else
       IO.unit
 
-  
   private def host(key: String): IO[Host] =
     IO.fromOption(Host.fromString(nodeContext.config.getString(key)))(
       new IllegalArgumentException(s"invalid host value for `$key`")
