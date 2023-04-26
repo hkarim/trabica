@@ -6,6 +6,8 @@ import trabica.model.*
 
 class RouterService(context: NodeContext) {
 
+  private final val logger = scribe.cats[IO]
+
   private val stateOrphanService: StateOrphanService =
     StateOrphanService.instance(context)
 
@@ -25,20 +27,32 @@ class RouterService(context: NodeContext) {
     StateJointService.instance(context)
 
   def onRequest(request: Request): IO[Response] =
-    context.nodeState.get.flatMap {
-      case v: NodeState.Orphan =>
-        stateOrphanService.onRequest(request)
-      case v: NodeState.NonVoter =>
-        stateNonVoterService.onRequest(request)
-      case v: NodeState.Follower =>
-        stateFollowerService.onRequest(request)
-      case v: NodeState.Candidate =>
-        stateCandidateService.onRequest(request)
-      case v: NodeState.Leader =>
-        stateLeaderService.onRequest(request)
-      case v: NodeState.Joint =>
-        stateJointService.onRequest(request)
+    logger.debug(s"routing request: $request") >>
+      context.nodeState.get.flatMap {
+        case _: NodeState.Orphan =>
+          stateOrphanService.onRequest(request)
+        case _: NodeState.NonVoter =>
+          stateNonVoterService.onRequest(request)
+        case _: NodeState.Follower =>
+          stateFollowerService.onRequest(request)
+        case _: NodeState.Candidate =>
+          stateCandidateService.onRequest(request)
+        case _: NodeState.Leader =>
+          stateLeaderService.onRequest(request)
+        case _: NodeState.Joint =>
+          stateJointService.onRequest(request)
+      }.flatMap(handle)
+
+  private def handle(serviceResponse: ServiceResponse): IO[Response] =
+    serviceResponse match {
+      case ServiceResponse.Pure(response) =>
+        IO.pure(response)
+      case ServiceResponse.Patch(newState, response) =>
+        context.nodeState.set(newState).as(response)
+      case ServiceResponse.Reload(newState, response) =>
+        OperationService.stateChanged(context, newState).as(response)
     }
+
 }
 
 object RouterService {

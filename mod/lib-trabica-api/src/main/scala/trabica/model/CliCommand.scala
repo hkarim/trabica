@@ -5,7 +5,10 @@ import cats.syntax.all.*
 import com.comcast.ip4s.*
 import com.monovore.decline.*
 
-sealed trait CliCommand
+sealed trait CliCommand {
+  def ip: Ipv4Address
+  def port: Port
+}
 
 object CliCommand {
 

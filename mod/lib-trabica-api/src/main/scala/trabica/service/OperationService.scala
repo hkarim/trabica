@@ -2,75 +2,90 @@ package trabica.service
 
 import cats.effect.*
 import cats.effect.std.Supervisor
-import fs2.*
 import trabica.context.NodeContext
-import trabica.model.{Event, NodeState}
-import trabica.net.Server
+import trabica.model.NodeState
 
 object OperationService {
 
   private final val logger = scribe.cats[IO]
 
   def run(context: NodeContext): IO[Unit] =
-    Supervisor[IO].use { supervisor =>
-      for {
-        _      <- eventStream(context, supervisor)
-        _      <- operate(context, supervisor)
-        server <- Server.instance(context).run
-      } yield server
+    operate(context)
+
+  private def operate(context: NodeContext): IO[Unit] =
+    Supervisor[IO](await = false).use { supervisor =>
+      context.nodeState.get.flatMap {
+        case _: NodeState.Orphan =>
+          orphan(context, supervisor)
+        case _: NodeState.NonVoter =>
+          nonVoter(context)
+        case _: NodeState.Follower =>
+          follower(context, supervisor)
+        case _: NodeState.Candidate =>
+          candidate(context)
+        case _: NodeState.Leader =>
+          leader(context, supervisor)
+        case _: NodeState.Joint =>
+          joint(context)
+      }
     }
 
-  private def operate(context: NodeContext, supervisor: Supervisor[IO]): IO[Unit] =
-    context.nodeState.get.flatMap {
-      case state: NodeState.Orphan =>
-        orphan(context, state, supervisor)
-      case state: NodeState.NonVoter =>
-        nonVoter(context, state, supervisor)
-      case state: NodeState.Follower =>
-        follower(context, state, supervisor)
-      case state: NodeState.Candidate =>
-        candidate(context, state, supervisor)
-      case state: NodeState.Leader =>
-        leader(context, state, supervisor)
-      case state: NodeState.Joint =>
-        joint(context, state, supervisor)
-    }.void
+  def stateChanged(context: NodeContext, state: NodeState): IO[Unit] =
+    for {
+      s <- context.nodeState.get
+      _ <- logger.debug(s"1. state changing, current node state ${s.tag}")
+      _ <- logger.debug(s"2. completing interrupt signal")
+      r <- s.signal.complete(())
+      _ <- logger.debug(s"3. signal done with value ($r), changing the state to ${state.tag}")
+      _ <- logger.debug(s"4. state will be changed to ${state.tag}")
+      _ <- context.nodeState.set(state)
+      _ <- logger.debug(s"5. preparing operations")
+      _ <- operate(context)
+    } yield ()
 
-  private def orphan(context: NodeContext, state: NodeState.Orphan, supervisor: Supervisor[IO]): IO[Unit] =
-    StateOrphanJoinStream.run(context, state, supervisor)
+  private def orphan(context: NodeContext, supervisor: Supervisor[IO]): IO[Unit] =
+    for {
+      state <- context.nodeState.get
+      id    <- context.orphanId.getAndUpdate(_ + 1)
+      _     <- logger.info(s"orphan [$id] starting")
+      _     <- StateOrphanJoinStream.instance(context, id).run.supervise(supervisor)
+      _     <- logger.info(s"orphan [$id] running, awaiting interrupt signal")
+      _     <- state.signal.get
+      _     <- logger.info(s"orphan [$id] interrupt signal received")
+      _     <- logger.info(s"orphan [$id] ended")
+    } yield ()
 
-  private def nonVoter(context: NodeContext, state: NodeState.NonVoter, supervisor: Supervisor[IO]): IO[Unit] =
+  private def nonVoter(context: NodeContext): IO[Unit] =
     ???
 
-  private def follower(context: NodeContext, state: NodeState.Follower, supervisor: Supervisor[IO]): IO[Unit] =
-    StateFollowerMonitorStream.run(context, state, supervisor)
+  private def follower(context: NodeContext, supervisor: Supervisor[IO]): IO[Unit] =
+    for {
+      state <- context.nodeState.get
+      id    <- context.followerId.getAndUpdate(_ + 1)
+      _     <- logger.info(s"follower [$id] starting").supervise(supervisor)
+      // _ <- StateFollowerMonitorStream.run(context).supervise(supervisor)
+      _ <- logger.info(s"follower [$id] running, awaiting interrupt signal")
+      _ <- state.signal.get
+      _ <- logger.info(s"follower [$id] interrupt signal received")
+      _ <- logger.info(s"follower [$id] ended")
+    } yield ()
 
-  private def candidate(context: NodeContext, state: NodeState.Candidate, supervisor: Supervisor[IO]): IO[Unit] =
+  private def candidate(context: NodeContext): IO[Unit] =
     ???
 
-  private def leader(context: NodeContext, state: NodeState.Leader, supervisor: Supervisor[IO]): IO[Unit] =
-    StateLeaderHeartbeatStream.run(context, state, supervisor)
+  private def leader(context: NodeContext, supervisor: Supervisor[IO]): IO[Unit] =
+    for {
+      state <- context.nodeState.get
+      id    <- context.leaderId.getAndUpdate(_ + 1)
+      _     <- logger.info(s"leader [$id] starting")
+      _     <- StateLeaderHeartbeatStream.instance(context, id).run.supervise(supervisor)
+      _     <- logger.info(s"leader [$id] running, awaiting interrupt signal")
+      _     <- state.signal.get
+      _     <- logger.info(s"leader [$id] interrupt signal received")
+      _     <- logger.info(s"leader [$id] ended")
+    } yield ()
 
-  private def joint(context: NodeContext, state: NodeState.Joint, supervisor: Supervisor[IO]): IO[Unit] =
+  private def joint(context: NodeContext): IO[Unit] =
     ???
-
-  private def eventStream(context: NodeContext, supervisor: Supervisor[IO]): IO[Unit] =
-    logger.info("starting up event stream") >>
-      Stream
-        .fromQueueUnterminated(context.events)
-        .evalTap(event => logger.debug(s"$event"))
-        .evalMap {
-          case Event.NodeStateChangedEvent(nodeState) =>
-            for {
-              _ <- context.interrupt.set(true)
-              _ <- context.nodeState.set(nodeState)
-              _ <- context.interrupt.set(false)
-              _ <- operate(context, supervisor)
-            } yield ()
-        }
-        .compile
-        .drain
-        .supervise(supervisor)
-        .void
 
 }

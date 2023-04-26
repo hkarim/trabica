@@ -6,44 +6,64 @@ import fs2.interop.scodec.{StreamDecoder, StreamEncoder}
 import fs2.io.net.Network
 import scodec.{Decoder, Encoder}
 import trabica.context.NodeContext
-import trabica.model.{Request, Response}
+import trabica.model.{CliCommand, Header, Request, Response}
 import trabica.service.RouterService
 
-class Server(context: NodeContext) {
+class Server(context: NodeContext, command: CliCommand) {
 
   private final val logger = scribe.cats[IO]
 
   private final val routerService: RouterService = RouterService.instance(context)
 
   def run: IO[Unit] =
-    context.nodeState.get.flatMap { nodeState =>
-      val ip   = Some(nodeState.self.ip)
-      val port = Some(nodeState.self.port)
-      logger.info(s"starting up main communication server on ip: ${nodeState.self.ip}, port: ${nodeState.self.port}") >>
-        Network[IO].server(ip, port).map { client =>
+    logger.info(s"starting up main communication server on ip: ${command.ip}, port: ${command.port}") >>
+      Network[IO]
+        .server(Some(command.ip), Some(command.port))
+        .evalTap { client =>
+          for {
+            ra <- client.remoteAddress
+            _ <- logger.debug(s"client ${ra} connected")
+          } yield ()
+        }
+        .map { client =>
           client.reads
             .through(StreamDecoder.many(Decoder[Request]).toPipeByte)
+            .evalTap(_ => logger.debug(s"server request received"))
             .evalMap { request =>
               routerService
                 .onRequest(request)
-            // .timeout(100.milliseconds)
+                .handleErrorWith { e =>
+                  for {
+                    _         <- logger.error(s"error handling request downstream, will return an error reply to the client", e)
+                    messageId <- context.messageId.getAndUpdate(_.increment)
+                    s         <- context.nodeState.get
+                    response = Response.Error(
+                      header = Header(
+                        peer = s.self,
+                        messageId = messageId,
+                        term = s.currentTerm,
+                      )
+                    )
+                  } yield response
+                }
             }
             .through(StreamEncoder.many(Encoder[Response]).toPipeByte)
             .through(client.writes)
             .handleErrorWith { e =>
-              Stream.eval(logger.error(s"server stream error: ${e.getMessage}", e)) >>
-                Stream.empty
+              Stream.eval {
+                for {
+                  _ <- logger.error(s"server stream error: ${e.getMessage}", e)
+                } yield ()
+              } >> Stream.empty
             }
-        // .timeout(100.milliseconds)
         }
-          .parJoinUnbounded
-          .compile
-          .drain
-    }
+        .parJoinUnbounded
+        .compile
+        .drain
 
 }
 
 object Server {
-  def instance(nodeContext: NodeContext): Server =
-    new Server(nodeContext)
+  def instance(context: NodeContext, command: CliCommand): Server =
+    new Server(context, command)
 }

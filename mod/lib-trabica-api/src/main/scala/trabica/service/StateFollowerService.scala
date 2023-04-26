@@ -2,13 +2,13 @@ package trabica.service
 
 import cats.effect.IO
 import trabica.context.NodeContext
-import trabica.model.{Header, NodeError, NodeState, Request, Response}
+import trabica.model.*
 
 class StateFollowerService(context: NodeContext) {
 
   private final val logger = scribe.cats[IO]
 
-  def onRequest(request: Request): IO[Response] =
+  def onRequest(request: Request): IO[ServiceResponse] =
     logger.debug(s"$request") >> {
       context.nodeState.get.flatMap {
         case state: NodeState.Follower =>
@@ -25,8 +25,9 @@ class StateFollowerService(context: NodeContext) {
       }
     }
 
-  private def onAppendEntries(state: NodeState.Follower, request: Request.AppendEntries): IO[Response.AppendEntries] =
+  private def onAppendEntries(state: NodeState.Follower, request: Request.AppendEntries): IO[ServiceResponse] =
     for {
+      _ <- logger.debug(s"follower received AppendEntries request")
       messageId <- context.messageId.getAndUpdate(_.increment)
       response = Response.AppendEntries(
         header = Header(
@@ -36,10 +37,11 @@ class StateFollowerService(context: NodeContext) {
         ),
         success = state.currentTerm >= request.header.term,
       )
-      _ <- state.heartbeat.offer(())
-    } yield response
+      _ <- logger.debug(s"updating heartbeat queue")
+      _ <- context.heartbeat.offer(())
+    } yield ServiceResponse.Pure(response)
 
-  private def onRequestVote(state: NodeState.Follower, request: Request.RequestVote): IO[Response.RequestVote] =
+  private def onRequestVote(state: NodeState.Follower, request: Request.RequestVote): IO[ServiceResponse] =
     for {
       messageId <- context.messageId.getAndUpdate(_.increment)
       response = Response.RequestVote(
@@ -50,10 +52,11 @@ class StateFollowerService(context: NodeContext) {
         ),
         voteGranted = request.header.term >= state.currentTerm,
       )
-    } yield response
+    } yield ServiceResponse.Pure(response)
 
-  private def onJoin(state: NodeState.Follower): IO[Response.Join] =
+  private def onJoin(state: NodeState.Follower): IO[ServiceResponse] =
     for {
+      _ <- logger.debug(s"follower received Join request")
       messageId <- context.messageId.getAndUpdate(_.increment)
       response = Response.Join(
         header = Header(
@@ -63,7 +66,7 @@ class StateFollowerService(context: NodeContext) {
         ),
         status = Response.JoinStatus.Forward(leader = state.leader),
       )
-    } yield response
+    } yield ServiceResponse.Pure(response)
 
 }
 

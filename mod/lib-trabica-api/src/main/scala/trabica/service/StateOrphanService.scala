@@ -1,6 +1,6 @@
 package trabica.service
 
-import cats.effect.IO
+import cats.effect.{Deferred, IO}
 import trabica.context.NodeContext
 import trabica.model.*
 
@@ -8,7 +8,7 @@ class StateOrphanService(context: NodeContext) {
 
   private final val logger = scribe.cats[IO]
 
-  def onRequest(request: Request): IO[Response] =
+  def onRequest(request: Request): IO[ServiceResponse] =
     logger.debug(s"$request") >> {
       context.nodeState.get.flatMap {
         case state: NodeState.Orphan =>
@@ -25,13 +25,38 @@ class StateOrphanService(context: NodeContext) {
       }
     }
 
-  private def onAppendEntries(state: NodeState.Orphan, request: Request.AppendEntries): IO[Response.AppendEntries] =
+  private def onAppendEntries(state: NodeState.Orphan, request: Request.AppendEntries): IO[ServiceResponse] = {
+    def newState(signal: Deferred[IO, Unit]) = NodeState.Follower(
+      id = state.id,
+      self = state.self,
+      peers = state.peers + request.header.peer,
+      leader = request.header.peer,
+      currentTerm = request.header.term,
+      votedFor = None,
+      commitIndex = Index.zero,
+      lastApplied = Index.zero,
+      signal = signal,
+    )
+
+    for {
+      _         <- logger.info(s"orphan received AppendEntries, will trigger state change to follower")
+      messageId <- context.messageId.getAndUpdate(_.increment)
+      response = Response.AppendEntries(
+        header = Header(
+          peer = state.self,
+          messageId = messageId,
+          term = request.header.term,
+        ),
+        success = true,
+      )
+      signal <- Deferred[IO, Unit]
+    } yield ServiceResponse.Reload(newState(signal), response)
+  }
+
+  private def onRequestVote(state: NodeState.Orphan, request: Request.RequestVote): IO[ServiceResponse] =
     ???
 
-  private def onRequestVote(state: NodeState.Orphan, request: Request.RequestVote): IO[Response.RequestVote] =
-    ???
-
-  private def onJoin(state: NodeState.Orphan): IO[Response.Join] =
+  private def onJoin(state: NodeState.Orphan): IO[ServiceResponse] =
     for {
       messageId <- context.messageId.getAndUpdate(_.increment)
       response = Response.Join(
@@ -42,7 +67,7 @@ class StateOrphanService(context: NodeContext) {
         ),
         status = Response.JoinStatus.UnknownLeader(knownPeers = state.peers.toVector),
       )
-    } yield response
+    } yield ServiceResponse.Pure(response)
 }
 
 object StateOrphanService {

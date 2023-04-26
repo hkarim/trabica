@@ -1,6 +1,6 @@
 package trabica.service
 
-import cats.effect.IO
+import cats.effect.{Deferred, IO}
 import trabica.context.NodeContext
 import trabica.model.*
 
@@ -8,7 +8,7 @@ class StateLeaderService(context: NodeContext) {
 
   private final val logger = scribe.cats[IO]
 
-  def onRequest(request: Request): IO[Response] =
+  def onRequest(request: Request): IO[ServiceResponse] =
     logger.debug(s"$request") >> {
       context.nodeState.get.flatMap {
         case state: NodeState.Leader =>
@@ -24,13 +24,13 @@ class StateLeaderService(context: NodeContext) {
           IO.raiseError(NodeError.InvalidNodeState(state))
       }
     }
-  private def onAppendEntries(state: NodeState.Leader, request: Request.AppendEntries): IO[Response.AppendEntries] =
+  private def onAppendEntries(state: NodeState.Leader, request: Request.AppendEntries): IO[ServiceResponse] =
     ???
 
-  private def onRequestVote(state: NodeState.Leader, request: Request.RequestVote): IO[Response.RequestVote] =
+  private def onRequestVote(state: NodeState.Leader, request: Request.RequestVote): IO[ServiceResponse] =
     ???
 
-  private def onJoin(state: NodeState.Leader, request: Request.Join): IO[Response.Join] =
+  private def onJoin(state: NodeState.Leader, request: Request.Join): IO[ServiceResponse] =
     for {
       messageId <- context.messageId.getAndUpdate(_.increment)
       response = Response.Join(
@@ -42,12 +42,9 @@ class StateLeaderService(context: NodeContext) {
         status = Response.JoinStatus.Accepted,
       )
       // TODO append new cluster config entry to the leader log
-      _ <- context.events.offer(
-        Event.NodeStateChangedEvent(
-          state.copy(peers = state.peers + request.header.peer)
-        )
-      )
-    } yield response
+      signal <- Deferred[IO, Unit]
+      newState = state.copy(peers = state.peers + request.header.peer, signal = signal)
+    } yield ServiceResponse.Reload(newState, response)
 
 }
 

@@ -1,110 +1,134 @@
 package trabica.service
 
 import cats.effect.*
-import cats.effect.std.{Queue, Supervisor}
 import cats.syntax.all.*
-import com.comcast.ip4s.{Host, SocketAddress}
+import com.comcast.ip4s.SocketAddress
 import fs2.*
-import fs2.interop.scodec.{StreamDecoder, StreamEncoder}
-import fs2.io.net.{Network, Socket}
-import scodec.{Decoder, Encoder}
+import fs2.io.net.Network
+import scodec.bits.ByteVector
+import scodec.{Attempt, DecodeResult, Decoder, Encoder}
 import trabica.context.NodeContext
 import trabica.model.*
+
 import scala.concurrent.duration.*
 
-object StateLeaderHeartbeatStream {
+class StateLeaderHeartbeatStream(context: NodeContext, id: Int) {
 
   private final val logger = scribe.cats[IO]
 
-  def run(context: NodeContext, state: NodeState.Leader, supervisor: Supervisor[IO]): IO[Unit] =
-    logger.info("restarting up heartbeat stream") >>
-      state.peers.toVector.traverse { peer =>
-        socketStream(context, SocketAddress(peer.ip, peer.port)).supervise(supervisor)
-      }.void
+  def run: IO[Unit] =
+    context.nodeState.get.flatMap {
+      case state: NodeState.Leader =>
+        logger.info(s"leader [$id] restarting heartbeat stream") >>
+          state.peers.toVector.traverse { peer =>
+            socketStream(state, peer)
+          }
+      case state =>
+        IO.raiseError(NodeError.InvalidNodeState(state))
+    }
+      .void
+      .onCancel {
+        logger.debug(s"leader [$id] all heartbeat streams canceled")
+      }
 
-  private def onResponse(context: NodeContext, response: Response.AppendEntries): IO[Unit] =
+  private def onResponse(response: Response.AppendEntries): IO[Unit] =
     for {
       state <- context.nodeState.get
       _ <-
         if state.currentTerm < response.header.term then {
-          for {
-            heartbeat <- Queue.unbounded[IO, Unit]
-            _ <- context.events.offer(
-              Event.NodeStateChangedEvent(
-                NodeState.Follower(
-                  id = state.id,
-                  self = state.self,
-                  peers = state.peers,
-                  leader = response.header.peer,
-                  currentTerm = response.header.term,
-                  votedFor = None,
-                  commitIndex = state.commitIndex,
-                  lastApplied = state.lastApplied,
-                  heartbeat = heartbeat,
-                )
-              )
+          def newState(signal: Deferred[IO, Unit]) =
+            NodeState.Follower(
+              id = state.id,
+              self = state.self,
+              peers = state.peers,
+              leader = response.header.peer,
+              currentTerm = response.header.term,
+              votedFor = None,
+              commitIndex = state.commitIndex,
+              lastApplied = state.lastApplied,
+              signal = signal,
             )
+
+          for {
+            _      <- logger.debug(s"leader [$id] changing state due discovered higher term")
+            _      <- logger.debug(s"leader [$id] current term ${state.currentTerm}, higher term ${response.header.term}")
+            signal <- Deferred[IO, Unit]
+            _      <- OperationService.stateChanged(context, newState(signal))
           } yield ()
         } else IO.unit
 
     } yield ()
 
-  private def pipe(context: NodeContext, socket: Socket[IO]): IO[Unit] = {
-    val writes: IO[Unit] =
-      Stream
-        .awakeEvery[IO](2.seconds)
-        .evalTap(_ => logger.debug("wake up"))
-        .evalMap(_ => context.nodeState.get)
-        .evalMap { state =>
-          context.messageId.getAndUpdate(_.increment).map { id =>
-            Request.AppendEntries(
-              header = Header(
-                peer = state.self,
-                messageId = id,
-                term = state.currentTerm,
-              ),
-              prevLogIndex = state.lastApplied,
-              prevLogTerm = state.currentTerm,
-              entries = Vector.empty,
-              leaderCommitIndex = state.lastApplied,
-            )
+  private def socketStream(state: NodeState.Leader, peer: Peer): IO[Unit] = {
+    val address = SocketAddress(peer.ip, peer.port)
+
+    val communication = for {
+      _         <- logger.debug(s"leader [$id] heartbeat wake up")
+      state     <- context.nodeState.get
+      messageId <- context.messageId.getAndUpdate(_.increment)
+      request = Request.AppendEntries(
+        header = Header(
+          peer = state.self,
+          messageId = messageId,
+          term = state.currentTerm,
+        ),
+        prevLogIndex = state.lastApplied,
+        prevLogTerm = state.currentTerm,
+        entries = Vector.empty,
+        leaderCommitIndex = state.lastApplied,
+      )
+      bytes <- Encoder[Request].encode(request).map(_.bytes) match {
+        case Attempt.Successful(value) =>
+          IO.pure(value)
+        case Attempt.Failure(cause) =>
+          IO.raiseError(new IllegalArgumentException(cause.toString))
+      }
+      _ <- Network[IO].client(address).use[Unit] { socket =>
+        for {
+          _ <- socket.write(Chunk.byteVector(bytes))
+          _ <- socket.endOfOutput
+          o <- socket.read(1024).timeout(100.milliseconds)
+          _ <- socket.endOfInput
+          r <- o match {
+            case Some(value) =>
+              Decoder[Response].decode(ByteVector.apply(value.toVector).bits) match {
+                case Attempt.Successful(DecodeResult(v: Response.AppendEntries, _)) =>
+                  onResponse(v)
+                case _ =>
+                  IO.unit
+              }
+            case None =>
+              IO.unit
           }
-        }
-        .through(StreamEncoder.many(Encoder[Request]).toPipeByte)
-        .through(socket.writes)
+        } yield r
+      }
+
+    } yield ()
+
+    val stream =
+      Stream
+        .fixedRateStartImmediately[IO](2.seconds)
+        .evalTap(_ => communication)
         .compile
         .drain
 
-    val reads: IO[Unit] =
-      socket.reads
-        .through(StreamDecoder.many(Decoder[Response]).toPipeByte)
-        .collect { case v: Response.AppendEntries => v }
-        .evalMap(response => onResponse(context, response))
-        .compile
-        .drain
+    Resilient
+      .retry(stream, 1, 4)
+      .handleErrorWith { e =>
+        for {
+          _           <- logger.debug(s"exhausted retries for peer $peer due to ${e.getMessage}")
+          stateSignal <- Deferred[IO, Unit]
+          _           <- logger.debug(s"will remove peer $peer from known peers")
+          newState = state.copy(peers = state.peers - peer, signal = stateSignal)
+          _ <- OperationService.stateChanged(context, newState)
+        } yield ()
+      }
 
-    Supervisor[IO].use { supervisor =>
-      for {
-        _ <- supervisor.supervise(writes)
-        _ <- reads
-      } yield ()
-    }
   }
 
-  private def socketStream(context: NodeContext, address: SocketAddress[Host]): IO[Unit] =
-    Stream
-      .resource(Network[IO].client(address))
-      .interruptWhen(context.interrupt)
-      .evalMap { socket =>
-        pipe(context, socket)
-      }
-      .compile
-      .drain
-      .onError { e =>
-        logger.error("heartbeat stream failed", e)
-      }
-      .onCancel {
-        logger.debug("heartbeat stream canceled")
-      }
+}
 
+object StateLeaderHeartbeatStream {
+  def instance(context: NodeContext, id: Int): StateLeaderHeartbeatStream =
+    new StateLeaderHeartbeatStream(context, id)
 }

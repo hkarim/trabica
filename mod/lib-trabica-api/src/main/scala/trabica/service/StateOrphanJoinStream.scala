@@ -1,12 +1,11 @@
 package trabica.service
 
 import cats.effect.*
-import cats.effect.std.{Queue, Supervisor}
 import cats.syntax.all.*
-import com.comcast.ip4s.{Host, SocketAddress}
+import com.comcast.ip4s.SocketAddress
 import fs2.Stream
 import fs2.interop.scodec.{StreamDecoder, StreamEncoder}
-import fs2.io.net.{Network, Socket}
+import fs2.io.net.Network
 import scodec.{Decoder, Encoder}
 import trabica.context.NodeContext
 import trabica.model.*
@@ -14,40 +13,50 @@ import trabica.model.Response.JoinStatus
 
 import scala.concurrent.duration.*
 
-object StateOrphanJoinStream {
+class StateOrphanJoinStream(context: NodeContext, id: Int) {
 
   private final val logger = scribe.cats[IO]
 
-  def run(context: NodeContext, state: NodeState.Orphan, supervisor: Supervisor[IO]): IO[Unit] =
-    logger.info("starting up join stream") >>
-      state.peers.toVector.traverse { peer =>
-        socketStream(context, SocketAddress(peer.ip, peer.port)).supervise(supervisor)
-      }.void
+  def run: IO[Unit] =
+    context.nodeState.get.flatMap {
+      case state: NodeState.Orphan =>
+        logger.info(s"orphan [$id] restarting heartbeat stream") >>
+          state.peers.toVector.traverse { peer =>
+            socketStream(peer)
+          }
+      case state =>
+        IO.raiseError(NodeError.InvalidNodeState(state))
+    }
+      .void
+      .onCancel {
+        logger.debug(s"orphan [$id] all join streams canceled")
+      }
 
-  private def onJoinResponse(context: NodeContext, response: Response.Join): IO[Unit] =
+  private def onJoinResponse(response: Response.Join): IO[Unit] =
     for {
+      _        <- logger.info(s"orphan [$id] join stream received response: $response")
       oldState <- context.nodeState.get
       _ <- response.status match {
         case JoinStatus.Accepted =>
+          def newState(signal: Deferred[IO, Unit]) = NodeState.Follower(
+            id = oldState.id,
+            self = oldState.self,
+            peers = oldState.peers + response.header.peer,
+            leader = response.header.peer,
+            currentTerm = response.header.term,
+            votedFor = None,
+            commitIndex = Index.zero,
+            lastApplied = Index.zero,
+            signal = signal,
+          )
           for {
-            heartbeat <- Queue.unbounded[IO, Unit]
-            newState = NodeState.Follower(
-              id = oldState.id,
-              self = oldState.self,
-              peers = oldState.peers + response.header.peer,
-              leader = response.header.peer,
-              currentTerm = response.header.term,
-              votedFor = None,
-              commitIndex = Index.zero,
-              lastApplied = Index.zero,
-              heartbeat = heartbeat,
-            )
-            _ <- logger.info(s"joining cluster response `accepted` through peer ${response.header.peer}")
-            _ <- context.events.offer(Event.NodeStateChangedEvent(newState))
+            _      <- logger.info(s"orphan [$id] joining cluster response `accepted` through peer ${response.header.peer}")
+            signal <- Deferred[IO, Unit]
+            _      <- OperationService.stateChanged(context, newState(signal))
           } yield ()
 
         case JoinStatus.UnknownLeader(knownPeers) =>
-          val newState = NodeState.Orphan(
+          def newState(signal: Deferred[IO, Unit]) = NodeState.Orphan(
             id = oldState.id,
             self = oldState.self,
             peers = knownPeers.toSet,
@@ -55,11 +64,15 @@ object StateOrphanJoinStream {
             votedFor = None,
             commitIndex = Index.zero,
             lastApplied = Index.zero,
+            signal = signal,
           )
-          logger.info(s"joining cluster response `unknown-leader`, using known peers of peer ${response.header.peer}") >>
-            context.events.offer(Event.NodeStateChangedEvent(newState))
+          for {
+            _ <- logger.info(s"orphan [$id] joining cluster response `unknown-leader`, using known peers of peer ${response.header.peer}")
+            signal <- Deferred[IO, Unit]
+            _      <- OperationService.stateChanged(context, newState(signal))
+          } yield ()
         case JoinStatus.Forward(leader) =>
-          val newState = NodeState.Orphan(
+          def newState(signal: Deferred[IO, Unit]) = NodeState.Orphan(
             id = oldState.id,
             self = oldState.self,
             peers = Set(leader),
@@ -67,58 +80,66 @@ object StateOrphanJoinStream {
             votedFor = None,
             commitIndex = Index.zero,
             lastApplied = Index.zero,
+            signal = signal,
           )
-          logger.info(s"joining cluster response `forward`, through peer ${response.header.peer}") >>
-            context.events.offer(Event.NodeStateChangedEvent(newState))
+          for {
+            _      <- logger.info(s"orphan [$id] joining cluster response `forward`, through peer ${response.header.peer}")
+            signal <- Deferred[IO, Unit]
+            _      <- OperationService.stateChanged(context, newState(signal))
+          } yield ()
       }
     } yield ()
 
-  private def communicate(context: NodeContext, socket: Socket[IO]): IO[Unit] = {
-    val writes: IO[Unit] =
+  private def socketStream(peer: Peer): IO[Unit] = {
+    val address = SocketAddress(peer.ip, peer.port)
+
+    val communication =
       Stream
         .fixedRateStartImmediately[IO](2.seconds)
-        .evalTap(_ => logger.debug("wake up"))
+        .evalTap(_ => logger.debug(s"orphan [$id] join wake up"))
         .evalMap(_ => context.nodeState.get)
-        .evalMap { state =>
-          context.messageId.getAndUpdate(_.increment).map { id =>
-            Request.Join(
-              header = Header(
-                peer = state.self,
-                messageId = id,
-                term = state.currentTerm,
-              ),
-            )
-          }
+        .flatMap { state =>
+          Stream
+            .resource(Network[IO].client(address))
+            .flatMap { socket =>
+              Stream
+                .eval {
+                  context.messageId.getAndUpdate(_.increment).map { id =>
+                    Request.Join(
+                      header = Header(
+                        peer = state.self,
+                        messageId = id,
+                        term = state.currentTerm,
+                      ),
+                    )
+                  }
+                }
+                .evalTap(_ => logger.debug(s"orphan [$id] sending join request to $peer"))
+                .through(StreamEncoder.once(Encoder[Request]).toPipeByte)
+                .through(socket.writes)
+                .evalMap { _ =>
+                  socket.reads
+                    .through(StreamDecoder.once(Decoder[Response]).toPipeByte)
+                    .collect { case v: Response.Join => v }
+                    .evalTap(_ => logger.debug(s"orphan [$id] join response from $peer"))
+                    .evalMap(onJoinResponse)
+                    .head
+                    .compile
+                    .drain
+                }
+            }
         }
-        .through(StreamEncoder.many(Encoder[Request]).toPipeByte)
-        .through(socket.writes)
         .compile
         .drain
 
-    val reads: IO[Unit] =
-      socket.reads
-        .through(StreamDecoder.many(Decoder[Response]).toPipeByte)
-        .collect { case v: Response.Join => v }
-        .evalMap(response => onJoinResponse(context, response))
-        .compile
-        .drain
+    Resilient
+      .retry(communication, 1, 4)
 
-    Supervisor[IO].use { supervisor =>
-      for {
-        _ <- supervisor.supervise(writes)
-        _ <- reads
-      } yield ()
-    }
   }
 
-  private def socketStream(context: NodeContext, address: SocketAddress[Host]): IO[Unit] =
-    Stream
-      .resource(Network[IO].client(address))
-      .interruptWhen(context.interrupt)
-      .evalMap { socket =>
-        communicate(context, socket)
-      }
-      .compile
-      .drain
+}
 
+object StateOrphanJoinStream {
+  def instance(context: NodeContext, id: Int): StateOrphanJoinStream =
+    new StateOrphanJoinStream(context, id)
 }

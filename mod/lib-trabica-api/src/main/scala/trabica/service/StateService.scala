@@ -20,6 +20,7 @@ object StateService {
   private def bootstrap(command: CliCommand.Bootstrap): IO[Ref[IO, NodeState]] = for {
     uuid <- UUIDGen.randomUUID[IO]
     id = NodeId.fromUUID(uuid)
+    signal <- Deferred[IO, Unit]
     nodeState <- Ref.of[IO, NodeState](
       NodeState.Leader(
         id = id,
@@ -34,6 +35,7 @@ object StateService {
         lastApplied = Index.zero,
         nextIndex = Index.zero,
         matchIndex = Index.zero,
+        signal = signal,
       )
     )
   } yield nodeState
@@ -41,6 +43,7 @@ object StateService {
   private def join(command: CliCommand.Join): IO[Ref[IO, NodeState]] = for {
     uuid <- UUIDGen.randomUUID[IO]
     id = NodeId.fromUUID(uuid)
+    signal <- Deferred[IO, Unit]
     nodeState <- Ref.of[IO, NodeState](
       NodeState.Orphan(
         id = id,
@@ -57,7 +60,8 @@ object StateService {
         currentTerm = Term.zero,
         votedFor = None,
         commitIndex = Index.zero,
-        lastApplied = Index.zero
+        lastApplied = Index.zero,
+        signal = signal,
       )
     )
   } yield nodeState

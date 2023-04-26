@@ -1,7 +1,6 @@
 package trabica.model
 
-import cats.effect.IO
-import cats.effect.std.Queue
+import cats.effect.{Deferred, IO}
 
 enum NodeStateTag {
   case Orphan
@@ -20,6 +19,7 @@ sealed trait NodeState {
   def votedFor: Option[Peer]
   def commitIndex: Index
   def lastApplied: Index
+  def signal: Deferred[IO, Unit]
   def tag: NodeStateTag
 }
 
@@ -33,6 +33,7 @@ object NodeState {
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
+    signal: Deferred[IO, Unit],
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Orphan
   }
@@ -46,6 +47,7 @@ object NodeState {
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
+    signal: Deferred[IO, Unit],
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.NonVoter
   }
@@ -59,7 +61,7 @@ object NodeState {
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
-    heartbeat: Queue[IO, Unit],
+    signal: Deferred[IO, Unit],
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Follower
   }
@@ -72,6 +74,7 @@ object NodeState {
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
+    signal: Deferred[IO, Unit],
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Candidate
   }
@@ -86,6 +89,7 @@ object NodeState {
     lastApplied: Index,
     nextIndex: Index,
     matchIndex: Index,
+    signal: Deferred[IO, Unit],
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Leader
   }
@@ -99,6 +103,7 @@ object NodeState {
     votedFor: Option[Peer],
     commitIndex: Index,
     lastApplied: Index,
+    signal: Deferred[IO, Unit],
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Joint
   }

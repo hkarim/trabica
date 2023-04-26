@@ -2,13 +2,13 @@ package trabica.service
 
 import cats.effect.IO
 import trabica.context.NodeContext
-import trabica.model.{Header, NodeError, NodeState, Request, Response}
+import trabica.model.*
 
 class StateNonVoterService(context: NodeContext) {
 
   private final val logger = scribe.cats[IO]
 
-  def onRequest(request: Request): IO[Response] =
+  def onRequest(request: Request): IO[ServiceResponse] =
     logger.debug(s"$request") >> {
       context.nodeState.get.flatMap {
         case state: NodeState.NonVoter =>
@@ -24,13 +24,13 @@ class StateNonVoterService(context: NodeContext) {
           IO.raiseError(NodeError.InvalidNodeState(state))
       }
     }
-  private def onAppendEntries(state: NodeState.NonVoter, request: Request.AppendEntries): IO[Response.AppendEntries] =
+  private def onAppendEntries(state: NodeState.NonVoter, request: Request.AppendEntries): IO[ServiceResponse] =
     ???
 
-  private def onRequestVote(state: NodeState.NonVoter, request: Request.RequestVote): IO[Response.RequestVote] =
+  private def onRequestVote(state: NodeState.NonVoter, request: Request.RequestVote): IO[ServiceResponse] =
     ???
 
-  private def onJoin(state: NodeState.NonVoter): IO[Response.Join] =
+  private def onJoin(state: NodeState.NonVoter): IO[ServiceResponse] =
     for {
       messageId <- context.messageId.getAndUpdate(_.increment)
       status = state.leader match {
@@ -47,7 +47,7 @@ class StateNonVoterService(context: NodeContext) {
         ),
         status = status,
       )
-    } yield response
+    } yield ServiceResponse.Pure(response)
 }
 
 object StateNonVoterService {

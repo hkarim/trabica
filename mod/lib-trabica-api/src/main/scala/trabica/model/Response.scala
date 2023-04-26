@@ -14,7 +14,8 @@ object Response {
       .by(Codec[Tag])
       .caseP[AppendEntries](Tag.Request.AppendEntries) { case v: AppendEntries => v }(identity)(Codec[AppendEntries])
       .caseP[RequestVote](Tag.Request.RequestVote) { case v: RequestVote => v }(identity)(Codec[RequestVote])
-      .caseP[Join](Tag.Request.Join) { case v: Join => v }(identity)(Codec[Join])
+      .caseP[Join](Tag.Response.Join) { case v: Join => v }(identity)(Codec[Join])
+      .caseP[Error](Tag.Response.Error) { case v: Error => v }(identity)(Codec[Error])
 
   final case class AppendEntries(
     header: Header,
@@ -44,6 +45,10 @@ object Response {
   final case class Join(
     header: Header,
     status: JoinStatus,
+  ) extends Response derives Codec
+
+  final case class Error(
+    header: Header,
   ) extends Response derives Codec
 
 }

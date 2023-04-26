@@ -12,6 +12,8 @@ object Term {
   final val zero: Term = 0L
 
   extension (self: Term) {
+    def increment: Term = self + 1
+    
     @targetName("lt")
     def <(that: Term): Boolean = self < that
 
