@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+//option java_package = "trabica";
+
+package trabica;
+
+message AppendEntriesRequest {
+  int32 term = 1;
+}
+
+message AppendEntriesResponse {
+  int32 term = 1;
+  bool success = 2;
+}
+
+service Trabica {
+  rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse) {}
+}
