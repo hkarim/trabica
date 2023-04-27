@@ -7,7 +7,8 @@ import fs2.*
 import trabica.model.NodeState
 import trabica.rpc.*
 
-class StateMachine(val node: Ref[IO, Node], val events: Queue[IO, NodeState]) extends TrabicaFs2Grpc[IO, Metadata] {
+class StateMachine(val node: Ref[IO, Node], val events: Queue[IO, NodeState], val trace: Ref[IO, NodeTrace])
+  extends TrabicaFs2Grpc[IO, Metadata] {
 
   private final val logger = scribe.cats[IO]
 
@@ -20,14 +21,17 @@ class StateMachine(val node: Ref[IO, Node], val events: Queue[IO, NodeState]) ex
         currentNode <- node.get
         f <- newState match {
           case state: NodeState.Orphan =>
-            logger.debug("transition to orphan") >>
+            logger.debug("transitioning to orphan") >>
               orphan(currentNode, state, supervisor)
                 .supervise(supervisor)
           case state: NodeState.NonVoter  => ???
           case state: NodeState.Follower  => ???
           case state: NodeState.Candidate => ???
-          case state: NodeState.Leader    => ???
-          case state: NodeState.Joint     => ???
+          case state: NodeState.Leader =>
+            logger.debug("transitioning to leader") >>
+              leader(currentNode, state, supervisor)
+                .supervise(supervisor)
+          case state: NodeState.Joint => ???
         }
       } yield f
     }
@@ -39,17 +43,32 @@ class StateMachine(val node: Ref[IO, Node], val events: Queue[IO, NodeState]) ex
       .compile
       .drain
 
-  private def orphan(currentNode: Node, newState: NodeState.Orphan, supervisor: Supervisor[IO]): IO[Unit] =
+  private def orphan(currentNode: Node, newState: NodeState, supervisor: Supervisor[IO]): IO[Unit] =
     for {
       signal <- Deferred[IO, Unit]
-      context = currentNode.context
-      ref <- Ref.of[IO, NodeState](newState)
-      newNode = OrphanNode.instance(context, ref, events, signal, supervisor)
+      ref    <- Ref.of[IO, NodeState](newState)
+      t      <- trace.incrementOrphan
+      newNode = OrphanNode.instance(currentNode.context, ref, events, signal, supervisor, t)
       _ <- currentNode.interrupt
       _ <- node.set(newNode)
       _ <- newNode.run.supervise(supervisor)
-      _ <- logger.debug("orphan running, awaiting terminate signal")
+      _ <- logger.debug(s"[orphan-${t.orphanId}] running, awaiting terminate signal")
       _ <- signal.get
+      _ <- logger.debug(s"[orphan-${t.orphanId}] terminated")
+    } yield ()
+
+  private def leader(currentNode: Node, newState: NodeState, supervisor: Supervisor[IO]): IO[Unit] =
+    for {
+      signal <- Deferred[IO, Unit]
+      ref    <- Ref.of[IO, NodeState](newState)
+      t      <- trace.incrementLeader
+      newNode = LeaderNode.instance(currentNode.context, ref, events, signal, supervisor, t)
+      _ <- currentNode.interrupt
+      _ <- node.set(newNode)
+      _ <- newNode.run.supervise(supervisor)
+      _ <- logger.debug(s"[leader-${t.leaderId}] running, awaiting terminate signal")
+      _ <- signal.get
+      _ <- logger.debug(s"[leader-${t.leaderId}] terminated")
     } yield ()
 
   override def appendEntries(request: AppendEntriesRequest, metadata: Metadata): IO[AppendEntriesResponse] =
@@ -73,7 +92,12 @@ class StateMachine(val node: Ref[IO, Node], val events: Queue[IO, NodeState]) ex
 
 object StateMachine {
 
-  def instance(node: Ref[IO, Node], events: Queue[IO, NodeState]): StateMachine =
-    new StateMachine(node, events)
+  def instance(node: Ref[IO, Node], events: Queue[IO, NodeState]): IO[StateMachine] =
+    for {
+      trace <- Ref.of[IO, NodeTrace](
+        NodeTrace(orphanId = 0, leaderId = 0)
+      )
+      fsm = new StateMachine(node, events, trace)
+    } yield fsm
 
 }

@@ -8,12 +8,18 @@ import trabica.rpc.*
 
 object GrpcClient {
 
+  private final val logger = scribe.cats[IO]
+
   def forPeer(peer: Peer): Resource[IO, TrabicaFs2Grpc[IO, Metadata]] =
     NettyChannelBuilder
       .forAddress(peer.host, peer.port)
+      .usePlaintext()
       .resource[IO]
       .flatMap { channel =>
         TrabicaFs2Grpc.stubResource[IO](channel)
+      }
+      .onFinalize {
+        logger.debug(s"grpc client for peer ${peer.host}:${peer.port} closed")
       }
 
 }

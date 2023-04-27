@@ -5,6 +5,7 @@ sealed trait NodeError extends Throwable {
 }
 
 object NodeError {
+
   case object Uninitialized extends NodeError {
     override def getMessage: String = "node is still initializing..." 
   }
@@ -14,6 +15,10 @@ object NodeError {
   
   case class InvalidNodeState(state: NodeState) extends NodeError {
     override def getMessage: String = s"invalid node state $state"
+  }
+
+  case object InvalidMessage extends NodeError {
+    override def getMessage: String = "invalid input message"
   }
   
   case class SocketWriteError(e: Throwable) extends NodeError {

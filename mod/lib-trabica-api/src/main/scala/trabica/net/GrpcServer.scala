@@ -9,6 +9,9 @@ import trabica.model.CliCommand
 import trabica.rpc.TrabicaFs2Grpc
 
 object GrpcServer {
+
+  private final val logger = scribe.cats[IO]
+
   def resource(fsm: StateMachine, command: CliCommand): Resource[IO, Server] = {
     def acquire(server: Server): IO[Server] =
       IO.delay(server.start())
@@ -23,8 +26,14 @@ object GrpcServer {
           .forPort(command.port)
           .addService(ssd)
           .resource[IO]
+          .evalTap { _ =>
+            logger.debug(s"grpc server starting on port ${command.port}")
+          }
           .flatMap { server =>
             Resource.make(acquire(server))(release)
+          }
+          .onFinalize {
+            logger.debug(s"grpc server shutdown")
           }
       }
   }

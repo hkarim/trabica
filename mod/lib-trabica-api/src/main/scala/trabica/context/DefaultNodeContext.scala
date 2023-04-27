@@ -35,11 +35,11 @@ object DefaultNodeContext {
         )
         node   <- Ref.of[IO, Node](Node.dead(context, nodeState))
         events <- Queue.unbounded[IO, NodeState]
-        fsm = StateMachine.instance(node, events)
-        _     <- fsm.run.supervise(supervisor)
-        state <- nodeState.get
-        _     <- events.offer(state)
-        _     <- GrpcServer.resource(fsm, command).useForever
+        fsm    <- StateMachine.instance(node, events)
+        _      <- fsm.run.supervise(supervisor)
+        state  <- nodeState.get
+        _      <- events.offer(state)
+        _      <- GrpcServer.resource(fsm, command).useForever
       } yield ()
     }
 
