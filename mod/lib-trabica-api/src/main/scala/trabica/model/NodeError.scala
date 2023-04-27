@@ -5,6 +5,9 @@ sealed trait NodeError extends Throwable {
 }
 
 object NodeError {
+  case object Uninitialized extends NodeError {
+    override def getMessage: String = "node is still initializing..." 
+  }
   case class InvalidConfig(key: String) extends NodeError {
     override def getMessage: String = s"invalid configuration for key: `$key`"
   }

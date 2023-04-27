@@ -1,6 +1,6 @@
 package trabica.model
 
-import cats.effect.{Deferred, IO}
+import trabica.rpc.Peer
 
 enum NodeStateTag {
   case Orphan
@@ -15,11 +15,10 @@ sealed trait NodeState {
   def id: NodeId
   def self: Peer
   def peers: Set[Peer]
-  def currentTerm: Term
+  def currentTerm: Long
   def votedFor: Option[Peer]
-  def commitIndex: Index
-  def lastApplied: Index
-  def signal: Deferred[IO, Unit]
+  def commitIndex: Long
+  def lastApplied: Long
   def tag: NodeStateTag
 }
 
@@ -29,11 +28,10 @@ object NodeState {
     id: NodeId,
     self: Peer,
     peers: Set[Peer],
-    currentTerm: Term,
+    currentTerm: Long,
     votedFor: Option[Peer],
-    commitIndex: Index,
-    lastApplied: Index,
-    signal: Deferred[IO, Unit],
+    commitIndex: Long,
+    lastApplied: Long,
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Orphan
   }
@@ -43,11 +41,10 @@ object NodeState {
     self: Peer,
     peers: Set[Peer],
     leader: Option[Peer],
-    currentTerm: Term,
+    currentTerm: Long,
     votedFor: Option[Peer],
-    commitIndex: Index,
-    lastApplied: Index,
-    signal: Deferred[IO, Unit],
+    commitIndex: Long,
+    lastApplied: Long,
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.NonVoter
   }
@@ -57,11 +54,10 @@ object NodeState {
     self: Peer,
     peers: Set[Peer],
     leader: Peer,
-    currentTerm: Term,
+    currentTerm: Long,
     votedFor: Option[Peer],
-    commitIndex: Index,
-    lastApplied: Index,
-    signal: Deferred[IO, Unit],
+    commitIndex: Long,
+    lastApplied: Long,
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Follower
   }
@@ -70,11 +66,10 @@ object NodeState {
     id: NodeId,
     self: Peer,
     peers: Set[Peer],
-    currentTerm: Term,
+    currentTerm: Long,
     votedFor: Option[Peer],
-    commitIndex: Index,
-    lastApplied: Index,
-    signal: Deferred[IO, Unit],
+    commitIndex: Long,
+    lastApplied: Long,
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Candidate
   }
@@ -83,13 +78,12 @@ object NodeState {
     id: NodeId,
     self: Peer,
     peers: Set[Peer],
-    currentTerm: Term,
+    currentTerm: Long,
     votedFor: Option[Peer],
-    commitIndex: Index,
-    lastApplied: Index,
-    nextIndex: Index,
-    matchIndex: Index,
-    signal: Deferred[IO, Unit],
+    commitIndex: Long,
+    lastApplied: Long,
+    nextIndex: Long,
+    matchIndex: Long,
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Leader
   }
@@ -99,11 +93,10 @@ object NodeState {
     self: Peer,
     peers: Set[Peer],
     leader: Option[Peer],
-    currentTerm: Term,
+    currentTerm: Long,
     votedFor: Option[Peer],
-    commitIndex: Index,
-    lastApplied: Index,
-    signal: Deferred[IO, Unit],
+    commitIndex: Long,
+    lastApplied: Long,
   ) extends NodeState {
     val tag: NodeStateTag = NodeStateTag.Joint
   }
