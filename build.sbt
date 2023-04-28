@@ -77,10 +77,6 @@ lazy val `node-template` = project
   .settings(
     graalVMNativeImageOptions ++= List(
       "-H:IncludeResources=(reference|application).conf$",
-      "--initialize-at-run-time=io.grpc.netty.shaded.io.grpc.netty.*",
-      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.bootstrap.*",
-      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.buffer.*",
-      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.*",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.unix.Errors",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.unix.IovArray",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.unix.Limits",
@@ -89,19 +85,14 @@ lazy val `node-template` = project
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.Native",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventLoop",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventArray",
-      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.*",
-      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.*",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSsl",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSslPrivateKeyMethod",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.ReferenceCountedOpenSslEngine",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSslAsyncPrivateKeyMethod",
-      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.*",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.AsyncSSLPrivateKeyMethod",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.CertificateVerifier",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.SSL",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.SSLPrivateKeyMethod",
-      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.resolver.*",
-      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.util.*",
       "--no-fallback",
     )
   )
