@@ -76,24 +76,37 @@ lazy val `node-template` = project
   )
   .settings(
     graalVMNativeImageOptions ++= List(
+      "--no-fallback",
       "-H:IncludeResources=(reference|application).conf$",
+      "-H:+ReportExceptionStackTraces",
+      // build-time
+      "--initialize-at-build-time=org.slf4j.simple.SimpleLogger",
+      "--initialize-at-build-time=org.slf4j.LoggerFactory",
+      "--initialize-at-build-time=io.grpc.netty.shaded.io.netty.util.internal.logging.Slf4JLoggerFactory",
+      // run-time
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.DefaultFileRegion",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.MultithreadEventLoopGroup",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.unix.Errors",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.unix.IovArray",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.unix.Limits",
-      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.*",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.Epoll",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.Native",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventLoop",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventArray",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.kqueue.KQueue",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.kqueue.KQueueEventLoop",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.kqueue.KQueueEventArray",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.kqueue.Native",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSsl",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSslPrivateKeyMethod",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.ReferenceCountedOpenSslEngine",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSslAsyncPrivateKeyMethod",
+      //"--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.BouncyCastleAlpnSslUtils",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.AsyncSSLPrivateKeyMethod",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.CertificateVerifier",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.SSL",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.SSLPrivateKeyMethod",
-      "--no-fallback",
+      "--initialize-at-run-time=io.netty.util.internal.logging.InternalLoggerFactory",
     )
   )
   .settings(
