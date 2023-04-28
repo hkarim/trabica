@@ -16,6 +16,7 @@ lazy val fullScalaOptions =
   )
 
 lazy val commonSettings = List(
+  organization := s"io.hk",
   scalaVersion := Lib.Version.scala,
   version := Lib.Version.service,
   Compile / packageDoc / mappings := Seq.empty,
@@ -63,6 +64,9 @@ lazy val `lib-trabica-api` = project
 
 lazy val `node-template` = project
   .in(file("mod/node-template"))
+  .settings(
+    name := "node-template"
+  )
   .enablePlugins(JavaAppPackaging)
   .enablePlugins(GraalVMNativeImagePlugin)
   .settings(commonSettings)
@@ -73,6 +77,31 @@ lazy val `node-template` = project
   .settings(
     graalVMNativeImageOptions ++= List(
       "-H:IncludeResources=(reference|application).conf$",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.grpc.netty.*",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.bootstrap.*",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.buffer.*",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.*",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.unix.Errors",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.unix.IovArray",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.unix.Limits",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.*",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.Epoll",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.Native",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventLoop",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.channel.epoll.EpollEventArray",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.*",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.*",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSsl",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSslPrivateKeyMethod",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.ReferenceCountedOpenSslEngine",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSslAsyncPrivateKeyMethod",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.*",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.AsyncSSLPrivateKeyMethod",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.CertificateVerifier",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.SSL",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.SSLPrivateKeyMethod",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.resolver.*",
+      "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.util.*",
       "--no-fallback",
     )
   )
