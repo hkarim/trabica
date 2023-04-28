@@ -1,25 +1,7 @@
 package trabica.fsm
 
 import cats.effect.*
-import trabica.model.{NodeError, NodeState}
-
-extension (self: Ref[IO, NodeState]) {
-  def orphan: IO[NodeState.Orphan] =
-    self.get.flatMap {
-      case v: NodeState.Orphan =>
-        IO.pure(v)
-      case v =>
-        IO.raiseError(NodeError.InvalidNodeState(v))
-    }
-
-  def leader: IO[NodeState.Leader] =
-    self.get.flatMap {
-      case v: NodeState.Leader =>
-        IO.pure(v)
-      case v =>
-        IO.raiseError(NodeError.InvalidNodeState(v))
-    }
-}
+import trabica.model.NodeError
 
 extension [A](self: Option[A]) {
   def required: IO[A] = self match {
@@ -55,5 +37,4 @@ extension (self: Ref[IO, NodeTrace]) {
   def incrementLeader: IO[NodeTrace] =
     self.modify(t => (t, t.copy(leaderId = t.leaderId + 1)))
 
-  
 }

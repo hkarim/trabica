@@ -1,9 +1,9 @@
 package trabica.fsm
 
-import cats.effect.{IO, Ref}
+import cats.effect.*
+import cats.effect.std.Queue
 import io.grpc.Metadata
-import trabica.context.NodeContext
-import trabica.model.{NodeError, NodeState}
+import trabica.model.{Event, NodeError, NodeState}
 import trabica.rpc.*
 
 trait Node extends TrabicaFs2Grpc[IO, Metadata] {
@@ -13,6 +13,7 @@ trait Node extends TrabicaFs2Grpc[IO, Metadata] {
 }
 
 object Node {
+
   private object DeadNode extends Node {
     override val interrupt: IO[Unit] = IO.unit
     override def appendEntries(request: AppendEntriesRequest, ctx: Metadata): IO[AppendEntriesResponse] =
@@ -23,6 +24,25 @@ object Node {
       IO.raiseError(NodeError.Uninitialized)
   }
 
-  def dead(context: NodeContext, state: Ref[IO, NodeState]): Node =
-    DeadNode
+  def dead: Node = DeadNode
+
+  def termCheck(header: Header, currentState: NodeState, events: Queue[IO, Event]): IO[Unit] =
+    for {
+      peer <- header.peer.required
+      _ <-
+        if header.term > currentState.currentTerm then {
+          val newState = NodeState.Follower(
+            id = currentState.id,
+            self = currentState.self,
+            peers = Set(peer),
+            leader = peer,
+            currentTerm = header.term,
+            votedFor = None,
+            commitIndex = currentState.commitIndex,
+            lastApplied = currentState.lastApplied,
+          )
+          events.offer(Event.NodeStateChanged(newState))
+        } else IO.unit
+
+    } yield ()
 }

@@ -25,7 +25,7 @@ class OrphanNode(
 ) extends Node {
 
   private final val logger = scribe.cats[IO]
-  
+
   private final val id: Int = trace.orphanId
 
   override def interrupt: IO[Unit] =
@@ -113,10 +113,14 @@ class OrphanNode(
             } yield ()
           case Status.Forward(JoinResponse.Forward(leaderOption, _)) =>
             for {
+              header       <- r.header.required
+              peer         <- header.peer.required
               leader       <- leaderOption.required
               currentState <- state.get
               _            <- logger.debug(s"[orphan-$id] forwarded to leader ${leader.host}:${leader.port}")
-              newState = currentState.copy(peers = Set(leader)) // change the peers
+              newState = currentState.copy(
+                peers = currentState.peers + leader - peer - currentState.self
+              ) // change the peers
               _ <- peersChanged(newState)
             } yield ()
           case Status.UnknownLeader(JoinResponse.UnknownLeader(knownPeers, _)) =>
@@ -125,7 +129,9 @@ class OrphanNode(
               peer         <- header.peer.required
               _            <- logger.debug(s"[orphan-$id] updating peers through peer ${peer.host}:${peer.port}")
               currentState <- state.get
-              newState = currentState.copy(peers = currentState.peers ++ Set.from(knownPeers)) // change the peers
+              newState = currentState.copy(
+                peers = Set.from(knownPeers) - peer - currentState.self
+              ) // change the peers
               _ <- peersChanged(newState)
             } yield ()
         }
@@ -144,6 +150,7 @@ class OrphanNode(
           messageId = messageId.value,
           term = s.currentTerm,
         ).some,
+        success = false, // cannot append entries
       )
     } yield response
 
@@ -157,6 +164,7 @@ class OrphanNode(
           messageId = messageId.value,
           term = s.currentTerm,
         ).some,
+        voteGranted = false, // cannot vote
       )
     } yield response
 

@@ -33,7 +33,7 @@ object DefaultNodeContext {
           config = config,
           messageId = messageId,
         )
-        node   <- Ref.of[IO, Node](Node.dead(context, nodeState))
+        node   <- Ref.of[IO, Node](Node.dead)
         fsm    <- StateMachine.instance(context, node)
         _      <- fsm.run.supervise(supervisor)
         state  <- nodeState.get

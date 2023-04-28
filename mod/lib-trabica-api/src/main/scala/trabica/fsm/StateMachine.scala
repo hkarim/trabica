@@ -34,7 +34,9 @@ class StateMachine(
           case state: NodeState.Follower =>
             logger.debug("transitioning to follower") >>
               follower(currentNode, state).supervise(supervisor)
-          case state: NodeState.Candidate => ???
+          case state: NodeState.Candidate =>
+            logger.debug("transitioning to candidate") >>
+              candidate(currentNode, state).supervise(supervisor)
           case state: NodeState.Leader =>
             logger.debug("transitioning to leader") >>
               leader(currentNode, state).supervise(supervisor)
@@ -55,53 +57,70 @@ class StateMachine(
 
   private def orphan(currentNode: Node, newState: NodeState.Orphan): IO[Unit] =
     for {
-      signal  <- Deferred[IO, Unit]
-      ref     <- Ref.of[IO, NodeState.Orphan](newState)
-      t       <- trace.incrementOrphan
-      _       <- logger.debug(s"[orphan-${t.orphanId}] starting node transition")
-      newNode <- OrphanNode.instance(context, ref, events, signal, supervisor, t)
-      _       <- logger.debug(s"[orphan-${t.orphanId}] interrupting current node")
-      _       <- currentNode.interrupt
-      _       <- node.set(newNode)
-      f       <- newNode.run
-      _       <- logger.debug(s"[orphan-${t.orphanId}] running, awaiting terminate signal")
-      _       <- signal.get
-      _       <- f.cancel
-      _       <- logger.debug(s"[orphan-${t.orphanId}] terminated")
+      s <- Deferred[IO, Unit]
+      r <- Ref.of[IO, NodeState.Orphan](newState)
+      t <- trace.incrementOrphan
+      _ <- logger.debug(s"[orphan-${t.orphanId}] starting node transition")
+      n <- OrphanNode.instance(context, r, events, s, supervisor, t)
+      _ <- logger.debug(s"[orphan-${t.orphanId}] interrupting current node")
+      _ <- currentNode.interrupt
+      _ <- node.set(n)
+      f <- n.run
+      _ <- logger.debug(s"[orphan-${t.orphanId}] running, awaiting terminate signal")
+      _ <- s.get
+      _ <- f.cancel
+      _ <- logger.debug(s"[orphan-${t.orphanId}] terminated")
     } yield ()
 
   private def follower(currentNode: Node, newState: NodeState.Follower): IO[Unit] =
     for {
-      signal  <- Deferred[IO, Unit]
-      ref     <- Ref.of[IO, NodeState.Follower](newState)
-      t       <- trace.incrementFollower
-      _       <- logger.debug(s"[follower-${t.followerId}] starting node transition")
-      newNode <- FollowerNode.instance(context, ref, events, signal, supervisor, t)
-      _       <- logger.debug(s"[follower-${t.followerId}] interrupting current node")
-      _       <- currentNode.interrupt
-      _       <- node.set(newNode)
-      f       <- newNode.run
-      _       <- logger.debug(s"[follower-${t.followerId}] running, awaiting terminate signal")
-      _       <- signal.get
-      _       <- f.cancel
-      _       <- logger.debug(s"[follower-${t.followerId}] terminated")
+      s <- Deferred[IO, Unit]
+      r <- Ref.of[IO, NodeState.Follower](newState)
+      t <- trace.incrementFollower
+      _ <- logger.debug(s"[follower-${t.followerId}] starting node transition")
+      n <- FollowerNode.instance(context, r, events, s, supervisor, t)
+      _ <- logger.debug(s"[follower-${t.followerId}] interrupting current node")
+      _ <- currentNode.interrupt
+      _ <- node.set(n)
+      f <- n.run
+      _ <- logger.debug(s"[follower-${t.followerId}] running, awaiting terminate signal")
+      _ <- s.get
+      _ <- f.cancel
+      _ <- logger.debug(s"[follower-${t.followerId}] terminated")
+    } yield ()
+
+  private def candidate(currentNode: Node, newState: NodeState.Candidate): IO[Unit] =
+    for {
+      s <- Deferred[IO, Unit]
+      r <- Ref.of[IO, NodeState.Candidate](newState)
+      t <- trace.incrementCandidate
+      _ <- logger.debug(s"[candidate-${t.candidateId}] starting node transition")
+      n <- CandidateNode.instance(context, r, events, s, supervisor, t)
+      _ <- logger.debug(s"[candidate-${t.candidateId}] interrupting current node")
+      _ <- currentNode.interrupt
+      _ <- node.set(n)
+      f <- n.run
+      _ <- logger.debug(s"[candidate-${t.candidateId}] running, awaiting terminate signal")
+      _ <- s.get
+      _ <- f.cancel
+      _ <- logger.debug(s"[candidate-${t.candidateId}] terminated")
     } yield ()
 
   private def leader(currentNode: Node, newState: NodeState.Leader): IO[Unit] =
     for {
-      signal  <- Deferred[IO, Unit]
-      ref     <- Ref.of[IO, NodeState.Leader](newState)
-      t       <- trace.incrementLeader
-      _       <- logger.debug(s"[leader-${t.leaderId}] starting node transition")
-      newNode <- LeaderNode.instance(context, ref, events, signal, supervisor, t)
-      _       <- logger.debug(s"[leader-${t.leaderId}] interrupting current node")
-      _       <- currentNode.interrupt
-      _       <- node.set(newNode)
-      f       <- newNode.run
-      _       <- logger.debug(s"[leader-${t.leaderId}] running, awaiting terminate signal")
-      _       <- signal.get
-      _       <- f.cancel
-      _       <- logger.debug(s"[leader-${t.leaderId}] terminated")
+      s <- Deferred[IO, Unit]
+      r <- Ref.of[IO, NodeState.Leader](newState)
+      t <- trace.incrementLeader
+      _ <- logger.debug(s"[leader-${t.leaderId}] starting node transition")
+      n <- LeaderNode.instance(context, r, events, s, supervisor, t)
+      _ <- logger.debug(s"[leader-${t.leaderId}] interrupting current node")
+      _ <- currentNode.interrupt
+      _ <- node.set(n)
+      f <- n.run
+      _ <- logger.debug(s"[leader-${t.leaderId}] running, awaiting terminate signal")
+      _ <- s.get
+      _ <- f.cancel
+      _ <- logger.debug(s"[leader-${t.leaderId}] terminated")
     } yield ()
 
   override def appendEntries(request: AppendEntriesRequest, metadata: Metadata): IO[AppendEntriesResponse] =

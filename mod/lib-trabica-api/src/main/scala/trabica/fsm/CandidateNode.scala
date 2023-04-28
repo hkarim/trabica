@@ -7,15 +7,15 @@ import io.grpc.Metadata
 import fs2.*
 import fs2.concurrent.SignallingRef
 import trabica.context.NodeContext
-import trabica.model.{Event, NodeState}
+import trabica.model.{Event, NodeError, NodeState}
 import trabica.net.GrpcClient
 import trabica.rpc.*
 
 import scala.concurrent.duration.*
 
-class LeaderNode(
+class CandidateNode(
   val context: NodeContext,
-  val state: Ref[IO, NodeState.Leader],
+  val state: Ref[IO, NodeState.Candidate],
   val events: Queue[IO, Event],
   val signal: Deferred[IO, Unit],
   val streamSignal: SignallingRef[IO, Boolean],
@@ -25,99 +25,88 @@ class LeaderNode(
 
   private final val logger = scribe.cats[IO]
 
-  private final val id: Int = trace.leaderId
+  private final val id: Int = trace.candidateId
 
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >> signal.complete(()).void >>
-      logger.debug(s"[leader-$id] interrupted")
+      logger.debug(s"[candidate-$id] interrupted")
 
   private def clients: Resource[IO, Vector[TrabicaFs2Grpc[IO, Metadata]]] =
     for {
-      currentState <- Resource.eval(state.get)
-      clients <- currentState.peers.toVector.traverse { peer =>
+      s <- Resource.eval(state.get)
+      clients <- s.peers.toVector.traverse { peer =>
         GrpcClient.forPeer(peer)
       }
     } yield clients
 
-  private def peersChanged(newState: NodeState.Leader): IO[FiberIO[Unit]] =
+  private def peersChanged(newState: NodeState.Candidate): IO[FiberIO[Unit]] =
     for {
-      _ <- logger.debug(s"[leader-$id] peers changed, restarting heartbeat stream")
+      _ <- logger.debug(s"[candidate-$id] peers changed, restarting vote stream")
       _ <- streamSignal.set(true) // stop the stream
       _ <- state.set(newState)
-      _ <- streamSignal.set(false)                            // reset the signal
-      f <- clients.use(heartbeatStream).supervise(supervisor) // start the stream
+      _ <- streamSignal.set(false)                       // reset the signal
+      f <- clients.use(voteStream).supervise(supervisor) // start the stream
     } yield f
 
-  private def heartbeatStream(clients: Vector[TrabicaFs2Grpc[IO, Metadata]]): IO[Unit] =
-    Stream(clients)
+  private def voteStream(clients: Vector[TrabicaFs2Grpc[IO, Metadata]]): IO[Unit] =
+    Stream
+      .fixedRateStartImmediately[IO](2.seconds)
       .interruptWhen(streamSignal)
-      .filter(_.nonEmpty)
-      .evalTap(_ => logger.debug(s"[leader-$id] starting heartbeat stream"))
-      .flatMap { cs =>
-        Stream
-          .fixedRateStartImmediately[IO](2.seconds)
-          .evalTap(_ => logger.debug(s"[leader-$id] heartbeat stream wake up"))
-          .evalMap { _ =>
-            for {
-              messageId    <- context.messageId.getAndUpdate(_.increment)
-              currentState <- state.get
-              request = AppendEntriesRequest(
-                header = Header(
-                  peer = currentState.self.some,
-                  messageId = messageId.value,
-                  term = currentState.currentTerm,
-                ).some,
-                peers = currentState.peers.toSeq,
-              )
-              responses <- cs.parTraverse { c =>
-                c.appendEntries(request, new Metadata)
-                  .timeout(100.milliseconds)
-                  .attempt
-                  .flatMap(onResponse)
-              }
-            } yield responses
-          }
-
+      .evalTap(_ => logger.debug(s"[candidate-$id] vote stream wake up"))
+      .flatMap { _ =>
+        Stream.eval {
+          for {
+            _         <- logger.debug(s"[candidate-$id] requesting vote from ${clients.length} client(s)")
+            messageId <- context.messageId.getAndUpdate(_.increment)
+            s         <- state.get
+            request = VoteRequest(
+              header = Header(
+                peer = s.self.some,
+                messageId = messageId.value,
+                term = s.currentTerm,
+              ).some
+            )
+            responses <- clients.parTraverse { c =>
+              c.vote(request, new Metadata)
+                .timeout(100.milliseconds)
+                .attempt
+                .flatMap(onVote)
+            }
+          } yield responses
+        }
       }
       .handleErrorWith { e =>
         Stream.eval {
-          logger.error(s"[leader-$id] error encountered in heartbeat stream: ${e.getMessage}", e)
+          logger.error(s"[candidate-$id] error encountered in vote stream: ${e.getMessage}", e)
         }
+      }
+      .onFinalize {
+        logger.debug(s"[candidate-$id] vote stream stopped")
       }
       .compile
       .drain
 
-  private def onResponse(response: Either[Throwable, AppendEntriesResponse]): IO[Unit] =
+  private def onVote(response: Either[Throwable, VoteResponse]): IO[Unit] =
     response match {
       case Left(e) =>
-        logger.debug(s"[leader-$id] no response ${e.getMessage}")
-      case Right(r) =>
+        logger.debug(s"[candidate-$id] vote response error ${e.getMessage}, ignoring")
+      case Right(VoteResponse(Some(header), true, _)) =>
         for {
-          header       <- r.header.required
-          currentState <- state.get
-          _ <-
-            if header.term > currentState.currentTerm then {
-              for {
-                peer <- header.peer.required
-                newState = NodeState.Follower(
-                  id = currentState.id,
-                  self = currentState.self,
-                  peers = Set(peer),
-                  leader = peer,
-                  currentTerm = header.term,
-                  votedFor = None,
-                  commitIndex = currentState.commitIndex,
-                  lastApplied = currentState.lastApplied,
-                )
-                _ <- events.offer(Event.NodeStateChanged(newState))
-              } yield ()
-            } else
-              IO.unit
+          peer <- header.peer.required
+          _    <- logger.debug(s"[candidate-$id] vote granted from peer ${peer.host}:${peer.port}")
         } yield ()
+      case Right(VoteResponse(Some(header), false, _)) =>
+        for {
+          peer <- header.peer.required
+          _    <- logger.debug(s"[candidate-$id] vote denied from peer ${peer.host}:${peer.port}")
+        } yield ()
+      case Right(v) =>
+        logger.debug(s"[candidate-$id] invalid vote message received: $v") >>
+          IO.raiseError(NodeError.InvalidMessage)
     }
 
   def run: IO[FiberIO[Unit]] =
-    clients.use(heartbeatStream).supervise(supervisor)
+    clients.use(voteStream).supervise(supervisor)
 
   override def appendEntries(request: AppendEntriesRequest, metadata: Metadata): IO[AppendEntriesResponse] =
     for {
@@ -138,7 +127,7 @@ class LeaderNode(
     for {
       peerHeader   <- request.header.required
       peer         <- peerHeader.peer.required
-      _            <- logger.debug(s"[leader-$id] peer ${peer.host}:${peer.port} joining")
+      _            <- logger.debug(s"[candidate-$id] peer ${peer.host}:${peer.port} requested to join")
       messageId    <- context.messageId.getAndUpdate(_.increment)
       currentState <- state.get
       response = JoinResponse(
@@ -147,11 +136,11 @@ class LeaderNode(
           messageId = messageId.value,
           term = currentState.currentTerm,
         ).some,
-        status = JoinResponse.Status.Accepted(
-          JoinResponse.Accepted()
+        status = JoinResponse.Status.UnknownLeader(
+          JoinResponse.UnknownLeader(knownPeers = currentState.peers.toSeq)
         )
       )
-      newState = currentState.copy(peers = currentState.peers + peer) // change the peers
+      newState = currentState.copy(peers = currentState.peers + peer)
       _ <- peersChanged(newState)
     } yield response
 
@@ -180,17 +169,17 @@ class LeaderNode(
 
 }
 
-object LeaderNode {
+object CandidateNode {
   def instance(
     context: NodeContext,
-    state: Ref[IO, NodeState.Leader],
+    state: Ref[IO, NodeState.Candidate],
     events: Queue[IO, Event],
     signal: Deferred[IO, Unit],
     supervisor: Supervisor[IO],
     trace: NodeTrace,
-  ): IO[LeaderNode] = for {
+  ): IO[CandidateNode] = for {
     streamSignal <- SignallingRef.of[IO, Boolean](false)
-    node = new LeaderNode(
+    node = new CandidateNode(
       context,
       state,
       events,
