@@ -1,6 +1,6 @@
 package trabica.context
 
-import cats.effect.std.{Queue, Supervisor}
+import cats.effect.std.Supervisor
 import cats.effect.{IO, Ref}
 import com.typesafe.config.{Config, ConfigFactory}
 import trabica.fsm.{Node, StateMachine}
@@ -34,11 +34,10 @@ object DefaultNodeContext {
           messageId = messageId,
         )
         node   <- Ref.of[IO, Node](Node.dead(context, nodeState))
-        events <- Queue.unbounded[IO, NodeState]
-        fsm    <- StateMachine.instance(node, events)
+        fsm    <- StateMachine.instance(context, node)
         _      <- fsm.run.supervise(supervisor)
         state  <- nodeState.get
-        _      <- events.offer(state)
+        _      <- fsm.events.offer(Event.NodeStateChanged(state))
         _      <- GrpcServer.resource(fsm, command).useForever
       } yield ()
     }
