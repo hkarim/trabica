@@ -144,14 +144,12 @@ class StateMachine(
 
 object StateMachine {
 
-  def instance(context: NodeContext, node: Ref[IO, Node]): IO[StateMachine] =
-    Supervisor[IO].use { supervisor =>
-      for {
-        trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
-        events <- Queue.unbounded[IO, Event]
-        mutex  <- Mutex[IO]
-        fsm = new StateMachine(context, node, events, supervisor, mutex, trace)
-      } yield fsm
-    }
+  def instance(context: NodeContext, node: Ref[IO, Node], supervisor: Supervisor[IO]): IO[StateMachine] =
+    for {
+      trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
+      events <- Queue.unbounded[IO, Event]
+      mutex  <- Mutex[IO]
+      fsm = new StateMachine(context, node, events, supervisor, mutex, trace)
+    } yield fsm
 
 }
