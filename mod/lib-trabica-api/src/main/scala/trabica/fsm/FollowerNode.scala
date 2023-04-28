@@ -58,7 +58,7 @@ class FollowerNode(
     for {
       _            <- logger.debug(s"[follower-$id] heartbeat stream timed out")
       currentState <- state.get
-      _            <- logger.debug(s"[follower-$id] switching to candidate, ${currentState.peers.size} known")
+      _            <- logger.debug(s"[follower-$id] switching to candidate, ${currentState.peers.size} peer(s) known")
       newState = NodeState.Candidate(
         id = currentState.id,
         self = currentState.self,
@@ -86,9 +86,12 @@ class FollowerNode(
         ).some,
       )
       header <- request.header.required
+      peer   <- header.peer.required
       _      <- heartbeatQueue.offer(())
       _      <- logger.debug(s"[follower-$id] updating peers, ${request.peers.length} peer(s) known to leader")
-      _ <- state.set(currentState.copy(peers = request.peers.toSet - currentState.self)) // copy the current peers from leader
+      _ <- state.set(
+        currentState.copy(peers = request.peers.toSet + peer - currentState.self)
+      ) // copy the current peers from leader including the leader and excluding self
       _ <- Node.termCheck(header, currentState, events)
     } yield response
 

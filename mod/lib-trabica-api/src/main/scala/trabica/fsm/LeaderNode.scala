@@ -160,6 +160,9 @@ class LeaderNode(
       messageId    <- context.messageId.getAndUpdate(_.increment)
       currentState <- state.get
       header       <- request.header.required
+      _ <- logger.debug(
+        s"[leader-$id] vote requested. votedFor=${currentState.votedFor}, term=${currentState.currentTerm}, request.term=${header.term}"
+      )
       voteGranted = currentState.votedFor.isEmpty && header.term > currentState.currentTerm
       response = VoteResponse(
         header = Header(
