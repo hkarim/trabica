@@ -4,10 +4,7 @@ import cats.effect.*
 import cats.effect.std.*
 import cats.syntax.all.*
 import fs2.*
-import fs2.concurrent.SignallingRef
-import trabica.model.{Event, NodeState}
-import trabica.rpc.*
-import trabica.rpc.JoinResponse.Status
+import trabica.model.*
 
 import scala.concurrent.duration.*
 
@@ -15,8 +12,7 @@ class OrphanNode(
   val context: NodeContext,
   val state: Ref[IO, NodeState.Orphan],
   val events: Queue[IO, Event],
-  val signal: Deferred[IO, Unit],
-  val streamSignal: SignallingRef[IO, Boolean],
+  val signal: Interrupt,
   val supervisor: Supervisor[IO],
   val trace: NodeTrace,
 ) extends Node {
@@ -28,7 +24,7 @@ class OrphanNode(
   private final val prefix: String = s"[orphan-$id]"
 
   override def interrupt: IO[Unit] =
-    streamSignal.set(true) >> signal.complete(()).void >>
+    signal.complete(Right(())).void >>
       logger.debug(s"$prefix interrupted")
 
   override def stateIO: IO[NodeState] = state.get
@@ -41,19 +37,17 @@ class OrphanNode(
       }
     } yield clients
 
-  private def peersChanged(newState: NodeState.Orphan): IO[FiberIO[Unit]] =
+  private def peersChanged(newState: NodeState.Orphan): IO[Unit] =
     for {
       _ <- logger.debug(s"$prefix peers changed, restarting join stream")
-      _ <- streamSignal.set(true) // stop the stream
-      _ <- state.set(newState)
-      _ <- streamSignal.set(false)                       // reset the signal
-      f <- clients.use(joinStream).supervise(supervisor) // start the stream
-    } yield f
+      currentState <- state.get
+      _ <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged))
+    } yield ()
 
   private def joinStream(clients: Vector[NodeApi]): IO[Unit] =
     Stream
       .fixedRateStartImmediately[IO](2.seconds)
-      .interruptWhen(streamSignal)
+      .interruptWhen(signal)
       .flatMap { _ =>
         Stream.eval {
           for {
@@ -74,7 +68,7 @@ class OrphanNode(
         }
       }
       .onFinalize {
-        logger.debug(s"$prefix join stream stopped")
+        logger.debug(s"$prefix join stream finalized")
       }
       .compile
       .drain
@@ -85,27 +79,26 @@ class OrphanNode(
         logger.debug(s"$prefix no response ${e.getMessage}")
       case Right(r) =>
         r.status match {
-          case Status.Empty =>
+          case JoinResponse.Status.Empty =>
             IO.unit
-          case Status.Accepted(_) =>
+          case JoinResponse.Status.Accepted(_) =>
             for {
               currentState <- state.get
               header       <- r.header.required
               peer         <- header.peer.required
               _            <- logger.debug(s"$prefix accepted by peer ${peer.host}:${peer.port}")
               newState = NodeState.Follower(
-                id = currentState.id,
                 self = currentState.self,
                 peers = Set(peer),
                 leader = peer,
-                currentTerm = header.term,
+                currentTerm = Term.of(header.term),
                 votedFor = None,
                 commitIndex = currentState.commitIndex,
                 lastApplied = currentState.lastApplied,
               )
-              _ <- events.offer(Event.NodeStateChanged(newState))
+              _ <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.JoinAccepted))
             } yield ()
-          case Status.Forward(JoinResponse.Forward(leaderOption, _)) =>
+          case JoinResponse.Status.Forward(JoinResponse.Forward(leaderOption, _)) =>
             for {
               header       <- r.header.required
               peer         <- header.peer.required
@@ -117,7 +110,7 @@ class OrphanNode(
               ) // change the peers
               _ <- peersChanged(newState)
             } yield ()
-          case Status.UnknownLeader(JoinResponse.UnknownLeader(knownPeers, _)) =>
+          case JoinResponse.Status.UnknownLeader(JoinResponse.UnknownLeader(knownPeers, _)) =>
             for {
               header       <- r.header.required
               peer         <- header.peer.required
@@ -155,20 +148,18 @@ object OrphanNode {
     context: NodeContext,
     state: Ref[IO, NodeState.Orphan],
     events: Queue[IO, Event],
-    signal: Deferred[IO, Unit],
+    signal: Interrupt,
     supervisor: Supervisor[IO],
     trace: NodeTrace,
-  ): IO[OrphanNode] = for {
-    streamSignal <- SignallingRef.of[IO, Boolean](false)
-    node = new OrphanNode(
+  ): IO[OrphanNode] = IO.pure {
+    new OrphanNode(
       context,
       state,
       events,
       signal,
-      streamSignal,
       supervisor,
       trace,
     )
-  } yield node
+  }
 
 }

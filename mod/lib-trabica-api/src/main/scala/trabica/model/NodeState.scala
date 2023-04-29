@@ -1,7 +1,5 @@
 package trabica.model
 
-import trabica.rpc.Peer
-
 enum NodeStateTag {
   case Orphan
   case NonVoter
@@ -12,92 +10,86 @@ enum NodeStateTag {
 }
 
 sealed trait NodeState {
-  def id: NodeId
   def self: Peer
   def peers: Set[Peer]
-  def currentTerm: Long
+  def currentTerm: Term
   def votedFor: Option[Peer]
-  def commitIndex: Long
-  def lastApplied: Long
+  def commitIndex: Index
+  def lastApplied: Index
   def tag: NodeStateTag
 }
 
 object NodeState {
 
   final case class Orphan(
-    id: NodeId,
     self: Peer,
     peers: Set[Peer],
-    currentTerm: Long,
+    currentTerm: Term,
     votedFor: Option[Peer],
-    commitIndex: Long,
-    lastApplied: Long,
+    commitIndex: Index,
+    lastApplied: Index,
   ) extends NodeState {
-    val tag: NodeStateTag = NodeStateTag.Orphan
+    override val tag: NodeStateTag = NodeStateTag.Orphan
   }
 
   final case class NonVoter(
-    id: NodeId,
     self: Peer,
     peers: Set[Peer],
     leader: Option[Peer],
-    currentTerm: Long,
+    currentTerm: Term,
     votedFor: Option[Peer],
-    commitIndex: Long,
-    lastApplied: Long,
+    commitIndex: Index,
+    lastApplied: Index,
   ) extends NodeState {
-    val tag: NodeStateTag = NodeStateTag.NonVoter
+    override val tag: NodeStateTag = NodeStateTag.NonVoter
   }
 
   final case class Follower(
-    id: NodeId,
     self: Peer,
     peers: Set[Peer],
     leader: Peer,
-    currentTerm: Long,
+    currentTerm: Term,
     votedFor: Option[Peer],
-    commitIndex: Long,
-    lastApplied: Long,
+    commitIndex: Index,
+    lastApplied: Index,
   ) extends NodeState {
-    val tag: NodeStateTag = NodeStateTag.Follower
+    override val tag: NodeStateTag = NodeStateTag.Follower
   }
 
   final case class Candidate(
-    id: NodeId,
     self: Peer,
     peers: Set[Peer],
-    currentTerm: Long,
+    currentTerm: Term,
     votedFor: Option[Peer],
-    commitIndex: Long,
-    lastApplied: Long,
+    commitIndex: Index,
+    lastApplied: Index,
+    votes: Set[Peer],
   ) extends NodeState {
-    val tag: NodeStateTag = NodeStateTag.Candidate
+    override val tag: NodeStateTag = NodeStateTag.Candidate
   }
 
   final case class Leader(
-    id: NodeId,
     self: Peer,
     peers: Set[Peer],
-    currentTerm: Long,
+    currentTerm: Term,
     votedFor: Option[Peer],
-    commitIndex: Long,
-    lastApplied: Long,
-    nextIndex: Long,
-    matchIndex: Long,
+    commitIndex: Index,
+    lastApplied: Index,
+    nextIndex: Map[Peer, Index],
+    matchIndex: Map[Peer, Index],
   ) extends NodeState {
-    val tag: NodeStateTag = NodeStateTag.Leader
+    override val tag: NodeStateTag = NodeStateTag.Leader
   }
 
   final case class Joint(
-    id: NodeId,
     self: Peer,
     peers: Set[Peer],
     leader: Option[Peer],
-    currentTerm: Long,
+    currentTerm: Term,
     votedFor: Option[Peer],
-    commitIndex: Long,
-    lastApplied: Long,
+    commitIndex: Index,
+    lastApplied: Index,
   ) extends NodeState {
-    val tag: NodeStateTag = NodeStateTag.Joint
+    override val tag: NodeStateTag = NodeStateTag.Joint
   }
 }

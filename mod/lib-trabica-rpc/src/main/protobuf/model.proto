@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+
+package trabica;
+
+message Peer {
+  string host = 1;
+  int32 port = 2;
+}
+
+message Header {
+  Peer peer = 1;
+  int64 messageId = 2;
+  int64 term = 3;
+}
+
+enum LogEntryTag {
+  Data = 0;
+  Conf = 1;
+}
+
+message LogEntry {
+  int64 index = 1;
+  int64 term = 2;
+  LogEntryTag tag = 3;
+  bytes data = 4;
+}
+
+message AppendEntriesRequest {
+  Header header = 1;
+  repeated Peer peers = 2;
+  int64 prevLogIndex = 3;
+  int64 prevLogTerm = 4;
+  int64 leaderCommitIndex = 5;
+  repeated LogEntry entries = 6;
+}
+
+message AppendEntriesResponse {
+  Header header = 1;
+  bool success = 2;
+}
+
+message VoteRequest {
+  Header header = 1;
+  int64 lastLogIndex = 2;
+  int64 lastLogTerm = 3;
+}
+
+message VoteResponse {
+  Header header = 1;
+  bool voteGranted = 2;
+}
+
+message JoinRequest {
+  Header header = 1;
+}
+
+message JoinResponse {
+
+  message Accepted {}
+  message Forward {
+    Peer leader = 1;
+  }
+  message UnknownLeader {
+    repeated Peer knownPeers = 1;
+  }
+
+  Header header = 1;
+  oneof status {
+    Accepted accepted = 2;
+    Forward forward = 3;
+    UnknownLeader unknownLeader = 4;
+  }
+}

@@ -2,7 +2,7 @@ package trabica.node
 
 import cats.effect.{IO, Resource}
 import io.grpc.Metadata
-import trabica.model.CliCommand
+import trabica.model.*
 import trabica.net.{GrpcClient, GrpcServer}
 import trabica.rpc.*
 

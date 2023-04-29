@@ -1,10 +1,9 @@
 package trabica.node
 
 import cats.effect.*
-import cats.effect.std.{Queue, Supervisor, UUIDGen}
+import cats.effect.std.{Queue, Supervisor}
 import cats.syntax.all.*
 import trabica.model.*
-import trabica.rpc.*
 
 trait Node {
 
@@ -29,7 +28,7 @@ trait Node {
       h = Header(
         peer = state.self.some,
         messageId = messageId.value,
-        term = state.currentTerm,
+        term = state.currentTerm.value,
       )
     } yield h
 
@@ -49,23 +48,23 @@ object Node {
     state match {
       case state: NodeState.Orphan =>
         for {
-          s <- Deferred[IO, Unit]
+          s <- Deferred[IO, Either[Throwable, Unit]]
           n <- orphan(context, events, supervisor, trace, s, state)
         } yield n
       case state: NodeState.NonVoter => ???
       case state: NodeState.Follower =>
         for {
-          s <- Deferred[IO, Unit]
+          s <- Deferred[IO, Either[Throwable, Unit]]
           n <- follower(context, events, supervisor, trace, s, state)
         } yield n
       case state: NodeState.Candidate =>
         for {
-          s <- Deferred[IO, Unit]
+          s <- Deferred[IO, Either[Throwable, Unit]]
           n <- candidate(context, events, supervisor, trace, s, state)
         } yield n
       case state: NodeState.Leader =>
         for {
-          s <- Deferred[IO, Unit]
+          s <- Deferred[IO, Either[Throwable, Unit]]
           n <- leader(context, events, supervisor, trace, s, state)
         } yield n
       case state: NodeState.Joint => ???
@@ -76,7 +75,7 @@ object Node {
     events: Queue[IO, Event],
     supervisor: Supervisor[IO],
     trace: Ref[IO, NodeTrace],
-    signal: Deferred[IO, Unit],
+    signal: Interrupt,
     state: NodeState.Orphan,
   ): IO[Node] =
     for {
@@ -90,7 +89,7 @@ object Node {
     events: Queue[IO, Event],
     supervisor: Supervisor[IO],
     trace: Ref[IO, NodeTrace],
-    signal: Deferred[IO, Unit],
+    signal: Interrupt,
     state: NodeState.Follower,
   ): IO[Node] =
     for {
@@ -104,7 +103,7 @@ object Node {
     events: Queue[IO, Event],
     supervisor: Supervisor[IO],
     trace: Ref[IO, NodeTrace],
-    signal: Deferred[IO, Unit],
+    signal: Interrupt,
     state: NodeState.Candidate,
   ): IO[Node] =
     for {
@@ -118,7 +117,7 @@ object Node {
     events: Queue[IO, Event],
     supervisor: Supervisor[IO],
     trace: Ref[IO, NodeTrace],
-    signal: Deferred[IO, Unit],
+    signal: Interrupt,
     state: NodeState.Leader,
   ): IO[Node] =
     for {
@@ -131,18 +130,17 @@ object Node {
     for {
       peer <- header.peer.required
       _ <-
-        if header.term > currentState.currentTerm then {
+        if Term.of(header.term) > currentState.currentTerm then {
           val newState = NodeState.Follower(
-            id = currentState.id,
             self = currentState.self,
             peers = Set(peer),
             leader = peer,
-            currentTerm = header.term,
+            currentTerm = Term.of(header.term),
             votedFor = None,
             commitIndex = currentState.commitIndex,
             lastApplied = currentState.lastApplied,
           )
-          events.offer(Event.NodeStateChanged(newState))
+          events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.HigherTermDiscovered))
         } else IO.unit
 
     } yield ()
@@ -156,45 +154,41 @@ object Node {
         join(v)
   }
 
-  private def bootstrap(command: CliCommand.Bootstrap): IO[NodeState] = for {
-    uuid <- UUIDGen.randomUUID[IO]
-    id = NodeId.fromUUID(uuid)
-    state = NodeState.Leader(
-      id = id,
-      self = Peer(
-        host = command.host,
-        port = command.port,
-      ),
-      peers = Set.empty,
-      votedFor = None,
-      currentTerm = 0L,
-      commitIndex = 0L,
-      lastApplied = 0L,
-      nextIndex = 0L,
-      matchIndex = 0L,
-    )
-  } yield state
+  private def bootstrap(command: CliCommand.Bootstrap): IO[NodeState] =
+    IO.pure {
+      NodeState.Leader(
+        self = Peer(
+          host = command.host,
+          port = command.port,
+        ),
+        peers = Set.empty,
+        votedFor = None,
+        currentTerm = Term.zero,
+        commitIndex = Index.zero,
+        lastApplied = Index.zero,
+        nextIndex = Map.empty,
+        matchIndex = Map.empty,
+      )
+    }
 
-  private def join(command: CliCommand.Join): IO[NodeState] = for {
-    uuid <- UUIDGen.randomUUID[IO]
-    id = NodeId.fromUUID(uuid)
-    state = NodeState.Orphan(
-      id = id,
-      self = Peer(
-        host = command.host,
-        port = command.port,
-      ),
-      peers = Set(
-        Peer(
-          host = command.peerHost,
-          port = command.peerPort,
-        )
-      ),
-      currentTerm = 0L,
-      votedFor = None,
-      commitIndex = 0L,
-      lastApplied = 0L,
-    )
-  } yield state
+  private def join(command: CliCommand.Join): IO[NodeState] =
+    IO.pure {
+      NodeState.Orphan(
+        self = Peer(
+          host = command.host,
+          port = command.port,
+        ),
+        peers = Set(
+          Peer(
+            host = command.peerHost,
+            port = command.peerPort,
+          )
+        ),
+        currentTerm = Term.zero,
+        votedFor = None,
+        commitIndex = Index.zero,
+        lastApplied = Index.zero,
+      )
+    }
 
 }

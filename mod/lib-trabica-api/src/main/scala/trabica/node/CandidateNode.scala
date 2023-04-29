@@ -4,18 +4,16 @@ import cats.effect.*
 import cats.effect.std.*
 import cats.syntax.all.*
 import fs2.*
-import fs2.concurrent.SignallingRef
-import trabica.model.{Event, NodeError, NodeState}
-import trabica.rpc.*
+import trabica.model.*
 
+import scala.concurrent.TimeoutException
 import scala.concurrent.duration.*
 
 class CandidateNode(
   val context: NodeContext,
   val state: Ref[IO, NodeState.Candidate],
   val events: Queue[IO, Event],
-  val signal: Deferred[IO, Unit],
-  val streamSignal: SignallingRef[IO, Boolean],
+  val signal: Interrupt,
   val supervisor: Supervisor[IO],
   val trace: NodeTrace,
 ) extends Node {
@@ -26,8 +24,20 @@ class CandidateNode(
 
   private final val prefix: String = s"[candidate-$id]"
 
+  private final val voteStreamRate: Long =
+    context.config.getLong("trabica.candidate.vote-stream.rate")
+
+  private final val voteStreamTimeoutMin: Long =
+    context.config.getLong("trabica.candidate.vote-stream.timeout.min")
+
+  private final val voteStreamTimeoutMax: Long =
+    context.config.getLong("trabica.candidate.vote-stream.timeout.max")
+
+  private final val voteRequestTimeout: Long =
+    context.config.getLong("trabica.candidate.vote-request.timeout")
+
   override def interrupt: IO[Unit] =
-    streamSignal.set(true) >> signal.complete(()).void >>
+    signal.complete(Right(())).void >>
       logger.debug(s"$prefix interrupted")
 
   override def stateIO: IO[NodeState] = state.get
@@ -40,45 +50,65 @@ class CandidateNode(
       }
     } yield clients
 
-  private def peersChanged(newState: NodeState.Candidate): IO[FiberIO[Unit]] =
+  private def peersChanged(newState: NodeState.Candidate): IO[Unit] =
     for {
-      _ <- logger.debug(s"$prefix peers changed, restarting vote stream")
-      _ <- streamSignal.set(true) // stop the stream
-      _ <- state.set(newState)
-      _ <- streamSignal.set(false)                       // reset the signal
-      f <- clients.use(voteStream).supervise(supervisor) // start the stream
-    } yield f
+      _            <- logger.debug(s"$prefix peers changed, restarting vote stream")
+      currentState <- state.get
+      _            <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged))
+    } yield ()
 
-  private def voteStream(clients: Vector[NodeApi]): IO[Unit] =
-    Stream
-      .fixedRateStartImmediately[IO](2.seconds)
-      .interruptWhen(streamSignal)
-      .evalTap(_ => logger.debug(s"$prefix vote stream wake up"))
-      .flatMap { _ =>
-        Stream.eval {
-          for {
-            _ <- logger.debug(s"$prefix requesting vote from ${clients.length} client(s)")
-            h <- header
-            request = VoteRequest(header = h.some)
-            responses <- clients.parTraverse { c =>
-              c.vote(request)
-                .timeout(100.milliseconds)
-                .attempt
-                .flatMap(onVote)
+  private def timeout: IO[Unit] =
+    for {
+      _ <- logger.debug(s"$prefix vote stream timed out, restarting election")
+      s <- state.updateAndGet(s => s.copy(currentTerm = s.currentTerm.increment))
+      _ <- logger.debug(s"$prefix starting vote stream with term ${s.currentTerm}")
+      _ <- events.offer(Event.NodeStateChanged(s, s, StateTransitionReason.ConfigurationChanged))
+    } yield ()
+
+  private def voteStream(nodes: Vector[NodeApi]): IO[Unit] =
+    Random.scalaUtilRandom[IO]
+      .flatMap { r =>
+        r.betweenLong(voteStreamTimeoutMin, voteStreamTimeoutMax)
+      }
+      .flatMap { t =>
+        Stream
+          .fixedRateStartImmediately[IO](voteStreamRate.milliseconds)
+          .interruptWhen(signal)
+          .evalTap(_ => logger.debug(s"$prefix vote stream wake up"))
+          .evalMap { _ =>
+            for {
+              _ <- logger.debug(s"$prefix requesting vote from ${nodes.length} client(s)")
+              h <- header
+              request = VoteRequest(header = h.some)
+              responses <- nodes.parTraverse { n =>
+                n.vote(request)
+                  .timeout(voteRequestTimeout.milliseconds)
+                  .attempt
+                  .flatMap(onVote)
+              }
+            } yield responses
+          }
+          .handleErrorWith { e =>
+            Stream.eval {
+              logger.error(s"$prefix error encountered in vote stream: ${e.getMessage}", e)
             }
-          } yield responses
-        }
+          }
+          .onFinalize {
+            logger.debug(s"$prefix vote stream finalized")
+          }
+          .compile
+          .drain
+          .timeout(t.milliseconds)
+          .attempt
+          .flatMap {
+            case Left(_: TimeoutException) =>
+              timeout.void
+            case Left(e) =>
+              logger.error(s"$prefix vote stream error", e)
+            case Right(_) =>
+              IO.unit
+          }
       }
-      .handleErrorWith { e =>
-        Stream.eval {
-          logger.error(s"$prefix error encountered in vote stream: ${e.getMessage}", e)
-        }
-      }
-      .onFinalize {
-        logger.debug(s"$prefix vote stream stopped")
-      }
-      .compile
-      .drain
 
   private def onVote(response: Either[Throwable, VoteResponse]): IO[Unit] =
     response match {
@@ -86,8 +116,24 @@ class CandidateNode(
         logger.debug(s"$prefix vote response error ${e.getMessage}, ignoring")
       case Right(VoteResponse(Some(header), true, _)) =>
         for {
-          peer <- header.peer.required
-          _    <- logger.debug(s"$prefix vote granted from peer ${peer.host}:${peer.port}")
+          peer         <- header.peer.required
+          _            <- logger.debug(s"$prefix vote granted from peer ${peer.host}:${peer.port}")
+          currentState <- state.updateAndGet(s => s.copy(votes = s.votes + peer))
+          peers = currentState.peers
+          _ <-
+            if currentState.votes.size >= math.ceil(peers.size / 2) + 1 then {
+              val newState = NodeState.Leader(
+                self = currentState.self,
+                peers = currentState.peers,
+                currentTerm = currentState.currentTerm,
+                votedFor = None,
+                commitIndex = currentState.commitIndex,
+                lastApplied = currentState.lastApplied,
+                nextIndex = Map.empty,
+                matchIndex = Map.empty,
+              )
+              events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.ElectedLeader))
+            } else IO.unit
         } yield ()
       case Right(VoteResponse(Some(header), false, _)) =>
         for {
@@ -106,7 +152,21 @@ class CandidateNode(
     for {
       currentState <- state.get
       header       <- request.header.required
-      _            <- Node.termCheck(header, currentState, events)
+      peer         <- header.peer.required
+      _ <-
+        if currentState.currentTerm.value == header.term then {
+          // a leader has been elected other than this candidate, change state to follower
+          val newState = NodeState.Follower(
+            self = currentState.self,
+            peers = currentState.peers + peer,
+            leader = peer,
+            currentTerm = Term.of(header.term),
+            votedFor = None,
+            commitIndex = currentState.commitIndex,
+            lastApplied = currentState.lastApplied
+          )
+          events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.HigherTermDiscovered))
+        } else Node.termCheck(header, currentState, events)
     } yield false
 
   override def join(request: JoinRequest): IO[JoinResponse.Status] =
@@ -123,19 +183,7 @@ class CandidateNode(
     } yield response
 
   override def vote(request: VoteRequest): IO[Boolean] =
-    for {
-      currentState <- state.get
-      header       <- request.header.required
-      voteGranted = currentState.votedFor.isEmpty && header.term > currentState.currentTerm
-      _ <-
-        if voteGranted then {
-          for {
-            peer <- header.peer.required
-            _    <- state.set(currentState.copy(votedFor = peer.some))
-          } yield ()
-        } else IO.unit
-    } yield voteGranted
-
+    IO.pure(false)
 }
 
 object CandidateNode {
@@ -143,19 +191,17 @@ object CandidateNode {
     context: NodeContext,
     state: Ref[IO, NodeState.Candidate],
     events: Queue[IO, Event],
-    signal: Deferred[IO, Unit],
+    signal: Interrupt,
     supervisor: Supervisor[IO],
     trace: NodeTrace,
-  ): IO[CandidateNode] = for {
-    streamSignal <- SignallingRef.of[IO, Boolean](false)
-    node = new CandidateNode(
+  ): IO[CandidateNode] = IO.pure {
+    new CandidateNode(
       context,
       state,
       events,
       signal,
-      streamSignal,
       supervisor,
       trace,
     )
-  } yield node
+  }
 }

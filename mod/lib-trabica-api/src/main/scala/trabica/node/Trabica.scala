@@ -1,19 +1,17 @@
 package trabica.node
 
 import cats.effect.*
-import cats.effect.std.{Mutex, Queue, Supervisor}
+import cats.effect.std.{Queue, Supervisor}
 import cats.syntax.all.*
 import com.typesafe.config.ConfigFactory
 import fs2.*
-import trabica.model.{CliCommand, Event, MessageId, NodeState}
-import trabica.rpc.*
+import trabica.model.*
 
 class Trabica(
   val context: NodeContext,
   val ref: Ref[IO, Node],
   val events: Queue[IO, Event],
   val supervisor: Supervisor[IO],
-  val mutex: Mutex[IO],
   val trace: Ref[IO, NodeTrace],
 ) extends NodeApi {
 
@@ -22,48 +20,44 @@ class Trabica(
   def run: IO[Unit] =
     eventStream
 
-  private def transition(newState: NodeState): IO[FiberIO[Unit]] =
-    mutex.lock.surround {
-      for {
-        currentNode <- ref.get
-        f <- newState match {
-          case state: NodeState.Orphan =>
-            logger.debug("transitioning to orphan") >>
-              orphan(currentNode, state).supervise(supervisor)
-          case state: NodeState.NonVoter => ???
-          case state: NodeState.Follower =>
-            logger.debug("transitioning to follower") >>
-              follower(currentNode, state).supervise(supervisor)
-          case state: NodeState.Candidate =>
-            logger.debug("transitioning to candidate") >>
-              candidate(currentNode, state).supervise(supervisor)
-          case state: NodeState.Leader =>
-            logger.debug("transitioning to leader") >>
-              leader(currentNode, state).supervise(supervisor)
-          case state: NodeState.Joint => ???
-        }
-      } yield f
-    }
+  private def transition(oldState: NodeState, newState: NodeState, reason: StateTransitionReason): IO[FiberIO[Unit]] =
+    for {
+      currentNode <- ref.get
+      _           <- logger.debug(s"transitioning [from: ${oldState.tag}, to: ${newState.tag}, reason: $reason]")
+      _           <- logger.debug(s"interrupting current node")
+      _           <- currentNode.interrupt
+      signal      <- Deferred[IO, Either[Throwable, Unit]]
+      f <- newState match {
+        case state: NodeState.Orphan =>
+          orphan(state, signal).supervise(supervisor)
+        case state: NodeState.NonVoter => ???
+        case state: NodeState.Follower =>
+          follower(state, signal).supervise(supervisor)
+        case state: NodeState.Candidate =>
+          candidate(state, signal).supervise(supervisor)
+        case state: NodeState.Leader =>
+          leader(state, signal).supervise(supervisor)
+        case state: NodeState.Joint => ???
+      }
+    } yield f
 
   private def eventStream: IO[Unit] =
     Stream
       .fromQueueUnterminated(events)
       .evalMap {
-        case Event.NodeStateChanged(newState) =>
-          transition(newState)
+        case Event.NodeStateChanged(oldState, newState, reason) =>
+          logger.debug(s"[event] node state changed, transitioning") >>
+            transition(oldState, newState, reason)
       }
       .compile
       .drain
 
   private def startup(
-    currentNode: Node,
     newNode: Node,
-    signal: Deferred[IO, Unit],
+    signal: Interrupt,
     loggingPrefix: String,
   ): IO[Unit] = for {
     _ <- logger.debug(s"$loggingPrefix starting node transition")
-    _ <- logger.debug(s"$loggingPrefix interrupting current node")
-    _ <- currentNode.interrupt
     f <- ref.flatModify(_ => (newNode, newNode.run))
     _ <- logger.debug(s"$loggingPrefix scheduled, awaiting terminate signal")
     _ <- signal.get
@@ -71,44 +65,40 @@ class Trabica(
     _ <- logger.debug(s"$loggingPrefix terminated")
   } yield ()
 
-  private def orphan(currentNode: Node, newState: NodeState.Orphan): IO[Unit] =
+  private def orphan(newState: NodeState.Orphan, s: Interrupt): IO[Unit] =
     for {
-      s <- Deferred[IO, Unit]
       r <- Ref.of[IO, NodeState.Orphan](newState)
       t <- trace.incrementOrphan
       l = s"[orphan-${t.orphanId}]"
       n <- OrphanNode.instance(context, r, events, s, supervisor, t)
-      _ <- startup(currentNode, n, s, l)
+      _ <- startup(n, s, l)
     } yield ()
 
-  private def follower(currentNode: Node, newState: NodeState.Follower): IO[Unit] =
+  private def follower(newState: NodeState.Follower, s: Interrupt): IO[Unit] =
     for {
-      s <- Deferred[IO, Unit]
       r <- Ref.of[IO, NodeState.Follower](newState)
       t <- trace.incrementFollower
       l = s"[follower-${t.followerId}]"
       n <- FollowerNode.instance(context, r, events, s, supervisor, t)
-      _ <- startup(currentNode, n, s, l)
+      _ <- startup(n, s, l)
     } yield ()
 
-  private def candidate(currentNode: Node, newState: NodeState.Candidate): IO[Unit] =
+  private def candidate(newState: NodeState.Candidate, s: Interrupt): IO[Unit] =
     for {
-      s <- Deferred[IO, Unit]
       r <- Ref.of[IO, NodeState.Candidate](newState)
       t <- trace.incrementCandidate
       l = s"[candidate-${t.candidateId}]"
       n <- CandidateNode.instance(context, r, events, s, supervisor, t)
-      _ <- startup(currentNode, n, s, l)
+      _ <- startup(n, s, l)
     } yield ()
 
-  private def leader(currentNode: Node, newState: NodeState.Leader): IO[Unit] =
+  private def leader(newState: NodeState.Leader, s: Interrupt): IO[Unit] =
     for {
-      s <- Deferred[IO, Unit]
       r <- Ref.of[IO, NodeState.Leader](newState)
       t <- trace.incrementLeader
       l = s"[leader-${t.leaderId}]"
       n <- LeaderNode.instance(context, r, events, s, supervisor, t)
-      _ <- startup(currentNode, n, s, l)
+      _ <- startup(n, s, l)
     } yield ()
 
   override def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse] =
@@ -170,8 +160,7 @@ object Trabica {
         trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
         node   <- Node.instance(context, events, supervisor, trace, state)
         ref    <- Ref.of[IO, Node](node)
-        mutex  <- Mutex[IO]
-        trabica = new Trabica(context, ref, events, supervisor, mutex, trace)
+        trabica = new Trabica(context, ref, events, supervisor, trace)
         _ <- node.run.supervise(supervisor)
         _ <- trabica.run.supervise(supervisor)
         _ <- NodeApi.server(trabica, command).useForever

@@ -4,9 +4,7 @@ import cats.effect.*
 import cats.effect.std.*
 import cats.syntax.all.*
 import fs2.*
-import fs2.concurrent.SignallingRef
-import trabica.model.{Event, NodeState}
-import trabica.rpc.*
+import trabica.model.*
 
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration.*
@@ -15,9 +13,8 @@ class FollowerNode(
   val context: NodeContext,
   val state: Ref[IO, NodeState.Follower],
   val events: Queue[IO, Event],
-  val signal: Deferred[IO, Unit],
-  val streamSignal: SignallingRef[IO, Boolean],
-  val heartbeatQueue: Queue[IO, Unit],
+  val signal: Interrupt,
+  val heartbeat: Ref[IO, Option[Unit]],
   val supervisor: Supervisor[IO],
   val trace: NodeTrace,
 ) extends Node {
@@ -28,30 +25,42 @@ class FollowerNode(
 
   private final val prefix: String = s"[follower-$id]"
 
+  private final val heartbeatStreamTimeout: Long =
+    context.config.getLong("trabica.follower.heartbeat-stream.timeout")
+
   override def interrupt: IO[Unit] =
-    streamSignal.set(true) >> signal.complete(()).void >>
+    signal.complete(Right(())).void >>
       logger.debug(s"$prefix interrupted")
 
   override def stateIO: IO[NodeState] = state.get
 
   private def heartbeatStream: IO[Unit] =
     Stream
-      .fixedRateStartImmediately[IO](2.seconds)
-      .interruptWhen(streamSignal)
+      .fixedRate[IO](heartbeatStreamTimeout.milliseconds)
+      .interruptWhen(signal)
+      .evalMap(_ => heartbeat.get)
       .evalTap(_ => logger.debug(s"$prefix heartbeat wake up"))
-      .evalMap(_ => heartbeatQueue.take.timeout(3.seconds).attempt)
       .evalMap {
-        case Left(_: TimeoutException) =>
-          timeout
-        case Left(e) =>
-          IO.raiseError(e)
-        case Right(_) =>
-          IO.unit
+        case Some(_) =>
+          logger.debug(s"$prefix heartbeat good to go") >>
+            heartbeat.set(None)
+        case None =>
+          logger.debug(s"$prefix heartbeat no elements, will timeout") >>
+            timeout
       }
       .handleErrorWith { e =>
         Stream.eval {
-          logger.error(s"$prefix error encountered in heartbeat stream: ${e.getMessage}", e)
+          e match {
+            case _: TimeoutException =>
+              timeout
+            case e =>
+              logger.error(s"$prefix error encountered in heartbeat stream: ${e.getMessage}", e) >>
+                IO.raiseError(e)
+          }
         }
+      }
+      .onFinalize {
+        logger.debug(s"$prefix heartbeat stream finalized")
       }
       .compile
       .drain
@@ -62,15 +71,15 @@ class FollowerNode(
       currentState <- state.get
       _            <- logger.debug(s"$prefix switching to candidate, ${currentState.peers.size} peer(s) known")
       newState = NodeState.Candidate(
-        id = currentState.id,
         self = currentState.self,
         peers = currentState.peers,
-        currentTerm = currentState.currentTerm + 1,
+        currentTerm = currentState.currentTerm.increment,
         votedFor = currentState.self.some, // vote for self
         commitIndex = currentState.commitIndex,
-        lastApplied = currentState.lastApplied
+        lastApplied = currentState.lastApplied,
+        votes = Set(currentState.self),
       )
-      - <- events.offer(Event.NodeStateChanged(newState))
+      - <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.NoHeartbeat))
     } yield ()
 
   def run: IO[FiberIO[Unit]] =
@@ -78,10 +87,10 @@ class FollowerNode(
 
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     for {
+      _            <- heartbeat.set(Some(()))
       currentState <- state.get
       header       <- request.header.required
       peer         <- header.peer.required
-      _            <- heartbeatQueue.offer(())
       _            <- logger.debug(s"$prefix updating peers, ${request.peers.length} peer(s) known to leader")
       _ <- state.set(
         currentState.copy(peers = request.peers.toSet + peer - currentState.self)
@@ -104,7 +113,7 @@ class FollowerNode(
     for {
       currentState <- state.get
       header       <- request.header.required
-      voteGranted = currentState.votedFor.isEmpty && header.term > currentState.currentTerm
+      voteGranted = currentState.votedFor.isEmpty && Term.of(header.term) > currentState.currentTerm
       _ <-
         if voteGranted then {
           for {
@@ -121,19 +130,17 @@ object FollowerNode {
     context: NodeContext,
     state: Ref[IO, NodeState.Follower],
     events: Queue[IO, Event],
-    signal: Deferred[IO, Unit],
+    signal: Interrupt,
     supervisor: Supervisor[IO],
     trace: NodeTrace,
   ): IO[FollowerNode] = for {
-    streamSignal   <- SignallingRef.of[IO, Boolean](false)
-    heartbeatQueue <- Queue.unbounded[IO, Unit]
+    heartbeat <- Ref.of[IO, Option[Unit]](None)
     node = new FollowerNode(
       context,
       state,
       events,
       signal,
-      streamSignal,
-      heartbeatQueue,
+      heartbeat,
       supervisor,
       trace,
     )
