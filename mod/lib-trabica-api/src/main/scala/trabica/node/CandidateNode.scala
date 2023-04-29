@@ -1,4 +1,4 @@
-package trabica.fsm
+package trabica.node
 
 import cats.effect.*
 import cats.effect.std.*
@@ -6,7 +6,6 @@ import cats.syntax.all.*
 import io.grpc.Metadata
 import fs2.*
 import fs2.concurrent.SignallingRef
-import trabica.context.NodeContext
 import trabica.model.{Event, NodeError, NodeState}
 import trabica.net.GrpcClient
 import trabica.rpc.*
@@ -27,9 +26,11 @@ class CandidateNode(
 
   private final val id: Int = trace.candidateId
 
+  private final val prefix: String = s"[candidate-$id]"
+
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >> signal.complete(()).void >>
-      logger.debug(s"[candidate-$id] interrupted")
+      logger.debug(s"$prefix interrupted")
 
   private def clients: Resource[IO, Vector[TrabicaFs2Grpc[IO, Metadata]]] =
     for {
@@ -41,7 +42,7 @@ class CandidateNode(
 
   private def peersChanged(newState: NodeState.Candidate): IO[FiberIO[Unit]] =
     for {
-      _ <- logger.debug(s"[candidate-$id] peers changed, restarting vote stream")
+      _ <- logger.debug(s"$prefix peers changed, restarting vote stream")
       _ <- streamSignal.set(true) // stop the stream
       _ <- state.set(newState)
       _ <- streamSignal.set(false)                       // reset the signal
@@ -52,11 +53,11 @@ class CandidateNode(
     Stream
       .fixedRateStartImmediately[IO](2.seconds)
       .interruptWhen(streamSignal)
-      .evalTap(_ => logger.debug(s"[candidate-$id] vote stream wake up"))
+      .evalTap(_ => logger.debug(s"$prefix vote stream wake up"))
       .flatMap { _ =>
         Stream.eval {
           for {
-            _         <- logger.debug(s"[candidate-$id] requesting vote from ${clients.length} client(s)")
+            _         <- logger.debug(s"$prefix requesting vote from ${clients.length} client(s)")
             messageId <- context.messageId.getAndUpdate(_.increment)
             s         <- state.get
             request = VoteRequest(
@@ -77,11 +78,11 @@ class CandidateNode(
       }
       .handleErrorWith { e =>
         Stream.eval {
-          logger.error(s"[candidate-$id] error encountered in vote stream: ${e.getMessage}", e)
+          logger.error(s"$prefix error encountered in vote stream: ${e.getMessage}", e)
         }
       }
       .onFinalize {
-        logger.debug(s"[candidate-$id] vote stream stopped")
+        logger.debug(s"$prefix vote stream stopped")
       }
       .compile
       .drain
@@ -89,19 +90,19 @@ class CandidateNode(
   private def onVote(response: Either[Throwable, VoteResponse]): IO[Unit] =
     response match {
       case Left(e) =>
-        logger.debug(s"[candidate-$id] vote response error ${e.getMessage}, ignoring")
+        logger.debug(s"$prefix vote response error ${e.getMessage}, ignoring")
       case Right(VoteResponse(Some(header), true, _)) =>
         for {
           peer <- header.peer.required
-          _    <- logger.debug(s"[candidate-$id] vote granted from peer ${peer.host}:${peer.port}")
+          _    <- logger.debug(s"$prefix vote granted from peer ${peer.host}:${peer.port}")
         } yield ()
       case Right(VoteResponse(Some(header), false, _)) =>
         for {
           peer <- header.peer.required
-          _    <- logger.debug(s"[candidate-$id] vote denied from peer ${peer.host}:${peer.port}")
+          _    <- logger.debug(s"$prefix vote denied from peer ${peer.host}:${peer.port}")
         } yield ()
       case Right(v) =>
-        logger.debug(s"[candidate-$id] invalid vote message received: $v") >>
+        logger.debug(s"$prefix invalid vote message received: $v") >>
           IO.raiseError(NodeError.InvalidMessage)
     }
 
@@ -127,7 +128,7 @@ class CandidateNode(
     for {
       peerHeader   <- request.header.required
       peer         <- peerHeader.peer.required
-      _            <- logger.debug(s"[candidate-$id] peer ${peer.host}:${peer.port} requested to join")
+      _            <- logger.debug(s"$prefix peer ${peer.host}:${peer.port} requested to join")
       messageId    <- context.messageId.getAndUpdate(_.increment)
       currentState <- state.get
       response = JoinResponse(

@@ -1,4 +1,4 @@
-package trabica.fsm
+package trabica.node
 
 import cats.effect.*
 import cats.effect.std.*
@@ -6,7 +6,6 @@ import cats.syntax.all.*
 import io.grpc.Metadata
 import fs2.*
 import fs2.concurrent.SignallingRef
-import trabica.context.NodeContext
 import trabica.model.{Event, NodeState}
 import trabica.net.GrpcClient
 import trabica.rpc.*
@@ -27,9 +26,11 @@ class LeaderNode(
 
   private final val id: Int = trace.leaderId
 
+  private final val prefix: String = s"[leader-$id]"
+
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >> signal.complete(()).void >>
-      logger.debug(s"[leader-$id] interrupted")
+      logger.debug(s"$prefix interrupted")
 
   private def clients: Resource[IO, Vector[TrabicaFs2Grpc[IO, Metadata]]] =
     for {
@@ -41,7 +42,7 @@ class LeaderNode(
 
   private def peersChanged(newState: NodeState.Leader): IO[FiberIO[Unit]] =
     for {
-      _ <- logger.debug(s"[leader-$id] peers changed, restarting heartbeat stream")
+      _ <- logger.debug(s"$prefix peers changed, restarting heartbeat stream")
       _ <- streamSignal.set(true) // stop the stream
       _ <- state.set(newState)
       _ <- streamSignal.set(false)                            // reset the signal
@@ -52,11 +53,11 @@ class LeaderNode(
     Stream(clients)
       .interruptWhen(streamSignal)
       .filter(_.nonEmpty)
-      .evalTap(_ => logger.debug(s"[leader-$id] starting heartbeat stream"))
+      .evalTap(_ => logger.debug(s"$prefix starting heartbeat stream"))
       .flatMap { cs =>
         Stream
           .fixedRateStartImmediately[IO](2.seconds)
-          .evalTap(_ => logger.debug(s"[leader-$id] heartbeat stream wake up"))
+          .evalTap(_ => logger.debug(s"$prefix heartbeat stream wake up"))
           .evalMap { _ =>
             for {
               messageId    <- context.messageId.getAndUpdate(_.increment)
@@ -81,7 +82,7 @@ class LeaderNode(
       }
       .handleErrorWith { e =>
         Stream.eval {
-          logger.error(s"[leader-$id] error encountered in heartbeat stream: ${e.getMessage}", e)
+          logger.error(s"$prefix error encountered in heartbeat stream: ${e.getMessage}", e)
         }
       }
       .compile
@@ -90,7 +91,7 @@ class LeaderNode(
   private def onResponse(response: Either[Throwable, AppendEntriesResponse]): IO[Unit] =
     response match {
       case Left(e) =>
-        logger.debug(s"[leader-$id] no response ${e.getMessage}")
+        logger.debug(s"$prefix no response ${e.getMessage}")
       case Right(r) =>
         for {
           header       <- r.header.required
@@ -138,7 +139,7 @@ class LeaderNode(
     for {
       peerHeader   <- request.header.required
       peer         <- peerHeader.peer.required
-      _            <- logger.debug(s"[leader-$id] peer ${peer.host}:${peer.port} joining")
+      _            <- logger.debug(s"$prefix peer ${peer.host}:${peer.port} joining")
       messageId    <- context.messageId.getAndUpdate(_.increment)
       currentState <- state.get
       response = JoinResponse(
@@ -161,7 +162,7 @@ class LeaderNode(
       currentState <- state.get
       header       <- request.header.required
       _ <- logger.debug(
-        s"[leader-$id] vote requested. votedFor=${currentState.votedFor}, term=${currentState.currentTerm}, request.term=${header.term}"
+        s"$prefix vote requested. votedFor=${currentState.votedFor}, term=${currentState.currentTerm}, request.term=${header.term}"
       )
       voteGranted = currentState.votedFor.isEmpty && header.term > currentState.currentTerm
       response = VoteResponse(

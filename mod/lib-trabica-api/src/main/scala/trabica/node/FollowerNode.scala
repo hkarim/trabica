@@ -1,4 +1,4 @@
-package trabica.fsm
+package trabica.node
 
 import cats.effect.*
 import cats.effect.std.*
@@ -6,7 +6,6 @@ import cats.syntax.all.*
 import io.grpc.Metadata
 import fs2.*
 import fs2.concurrent.SignallingRef
-import trabica.context.NodeContext
 import trabica.model.{Event, NodeState}
 import trabica.rpc.*
 
@@ -28,15 +27,17 @@ class FollowerNode(
 
   private final val id: Int = trace.followerId
 
+  private final val prefix: String = s"[follower-$id]"
+
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >> signal.complete(()).void >>
-      logger.debug(s"[follower-$id] interrupted")
+      logger.debug(s"$prefix interrupted")
 
   private def heartbeatStream: IO[Unit] =
     Stream
       .fixedRateStartImmediately[IO](2.seconds)
       .interruptWhen(streamSignal)
-      .evalTap(_ => logger.debug(s"[follower-$id] heartbeat wake up"))
+      .evalTap(_ => logger.debug(s"$prefix heartbeat wake up"))
       .evalMap(_ => heartbeatQueue.take.timeout(3.seconds).attempt)
       .evalMap {
         case Left(_: TimeoutException) =>
@@ -48,7 +49,7 @@ class FollowerNode(
       }
       .handleErrorWith { e =>
         Stream.eval {
-          logger.error(s"[follower-$id] error encountered in heartbeat stream: ${e.getMessage}", e)
+          logger.error(s"$prefix error encountered in heartbeat stream: ${e.getMessage}", e)
         }
       }
       .compile
@@ -56,9 +57,9 @@ class FollowerNode(
 
   private def timeout: IO[Unit] =
     for {
-      _            <- logger.debug(s"[follower-$id] heartbeat stream timed out")
+      _            <- logger.debug(s"$prefix heartbeat stream timed out")
       currentState <- state.get
-      _            <- logger.debug(s"[follower-$id] switching to candidate, ${currentState.peers.size} peer(s) known")
+      _            <- logger.debug(s"$prefix switching to candidate, ${currentState.peers.size} peer(s) known")
       newState = NodeState.Candidate(
         id = currentState.id,
         self = currentState.self,
@@ -88,7 +89,7 @@ class FollowerNode(
       header <- request.header.required
       peer   <- header.peer.required
       _      <- heartbeatQueue.offer(())
-      _      <- logger.debug(s"[follower-$id] updating peers, ${request.peers.length} peer(s) known to leader")
+      _      <- logger.debug(s"$prefix updating peers, ${request.peers.length} peer(s) known to leader")
       _ <- state.set(
         currentState.copy(peers = request.peers.toSet + peer - currentState.self)
       ) // copy the current peers from leader including the leader and excluding self
@@ -99,7 +100,7 @@ class FollowerNode(
     for {
       peerHeader   <- request.header.required
       peer         <- peerHeader.peer.required
-      _            <- logger.debug(s"[follower-$id] peer ${peer.host}:${peer.port} joining")
+      _            <- logger.debug(s"$prefix peer ${peer.host}:${peer.port} joining")
       messageId    <- context.messageId.getAndUpdate(_.increment)
       currentState <- state.get
       response = JoinResponse(

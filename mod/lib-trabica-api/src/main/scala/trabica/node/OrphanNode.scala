@@ -1,4 +1,4 @@
-package trabica.fsm
+package trabica.node
 
 import cats.effect.*
 import cats.effect.std.*
@@ -6,7 +6,6 @@ import cats.syntax.all.*
 import io.grpc.Metadata
 import fs2.*
 import fs2.concurrent.SignallingRef
-import trabica.context.NodeContext
 import trabica.model.{Event, NodeState}
 import trabica.net.GrpcClient
 import trabica.rpc.*
@@ -27,10 +26,12 @@ class OrphanNode(
   private final val logger = scribe.cats[IO]
 
   private final val id: Int = trace.orphanId
+  
+  private final val prefix: String = s"[orphan-$id]"
 
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >> signal.complete(()).void >>
-      logger.debug(s"[orphan-$id] interrupted")
+      logger.debug(s"$prefix interrupted")
 
   private def clients: Resource[IO, Vector[TrabicaFs2Grpc[IO, Metadata]]] =
     for {
@@ -42,7 +43,7 @@ class OrphanNode(
 
   private def peersChanged(newState: NodeState.Orphan): IO[FiberIO[Unit]] =
     for {
-      _ <- logger.debug(s"[orphan-$id] peers changed, restarting join stream")
+      _ <- logger.debug(s"$prefix peers changed, restarting join stream")
       _ <- streamSignal.set(true) // stop the stream
       _ <- state.set(newState)
       _ <- streamSignal.set(false)                       // reset the signal
@@ -76,11 +77,11 @@ class OrphanNode(
       }
       .handleErrorWith { e =>
         Stream.eval {
-          logger.error(s"[orphan-$id] error encountered in join stream: ${e.getMessage}", e)
+          logger.error(s"$prefix error encountered in join stream: ${e.getMessage}", e)
         }
       }
       .onFinalize {
-        logger.debug(s"[orphan-$id] join stream stopped")
+        logger.debug(s"$prefix join stream stopped")
       }
       .compile
       .drain
@@ -88,7 +89,7 @@ class OrphanNode(
   private def onJoin(response: Either[Throwable, JoinResponse]): IO[Unit] =
     response match {
       case Left(e) =>
-        logger.debug(s"[orphan-$id] no response ${e.getMessage}")
+        logger.debug(s"$prefix no response ${e.getMessage}")
       case Right(r) =>
         r.status match {
           case Status.Empty =>
@@ -98,7 +99,7 @@ class OrphanNode(
               currentState <- state.get
               header       <- r.header.required
               peer         <- header.peer.required
-              _            <- logger.debug(s"[orphan-$id] accepted by peer ${peer.host}:${peer.port}")
+              _            <- logger.debug(s"$prefix accepted by peer ${peer.host}:${peer.port}")
               newState = NodeState.Follower(
                 id = currentState.id,
                 self = currentState.self,
@@ -117,7 +118,7 @@ class OrphanNode(
               peer         <- header.peer.required
               leader       <- leaderOption.required
               currentState <- state.get
-              _            <- logger.debug(s"[orphan-$id] forwarded to leader ${leader.host}:${leader.port}")
+              _            <- logger.debug(s"$prefix forwarded to leader ${leader.host}:${leader.port}")
               newState = currentState.copy(
                 peers = currentState.peers + leader - peer - currentState.self
               ) // change the peers
@@ -127,7 +128,7 @@ class OrphanNode(
             for {
               header       <- r.header.required
               peer         <- header.peer.required
-              _            <- logger.debug(s"[orphan-$id] updating peers through peer ${peer.host}:${peer.port}")
+              _            <- logger.debug(s"$prefix updating peers through peer ${peer.host}:${peer.port}")
               currentState <- state.get
               newState = currentState.copy(
                 peers = Set.from(knownPeers) - peer - currentState.self

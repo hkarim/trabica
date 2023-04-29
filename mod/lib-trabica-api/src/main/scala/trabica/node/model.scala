@@ -1,4 +1,4 @@
-package trabica.fsm
+package trabica.node
 
 import cats.effect.*
 import trabica.model.NodeError
