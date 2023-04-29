@@ -4,10 +4,8 @@ import cats.effect.*
 import cats.effect.std.{Mutex, Queue, Supervisor}
 import cats.syntax.all.*
 import com.typesafe.config.ConfigFactory
-import io.grpc.Metadata
 import fs2.*
 import trabica.model.{CliCommand, Event, MessageId, NodeState}
-import trabica.net.GrpcServer
 import trabica.rpc.*
 
 class Trabica(
@@ -17,7 +15,7 @@ class Trabica(
   val supervisor: Supervisor[IO],
   val mutex: Mutex[IO],
   val trace: Ref[IO, NodeTrace],
-) extends TrabicaFs2Grpc[IO, Metadata] {
+) extends NodeApi {
 
   private final val logger = scribe.cats[IO]
 
@@ -113,7 +111,7 @@ class Trabica(
       _ <- startup(currentNode, n, s, l)
     } yield ()
 
-  override def appendEntries(request: AppendEntriesRequest, metadata: Metadata): IO[AppendEntriesResponse] =
+  override def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse] =
     for {
       server  <- ref.get
       header  <- server.header
@@ -124,7 +122,7 @@ class Trabica(
       )
     } yield response
 
-  override def vote(request: VoteRequest, metadata: Metadata): IO[VoteResponse] =
+  override def vote(request: VoteRequest): IO[VoteResponse] =
     for {
       server      <- ref.get
       header      <- server.header
@@ -135,7 +133,7 @@ class Trabica(
       )
     } yield response
 
-  override def join(request: JoinRequest, metadata: Metadata): IO[JoinResponse] =
+  override def join(request: JoinRequest): IO[JoinResponse] =
     for {
       server <- ref.get
       header <- server.header
@@ -176,7 +174,7 @@ object Trabica {
         trabica = new Trabica(context, ref, events, supervisor, mutex, trace)
         _ <- node.run.supervise(supervisor)
         _ <- trabica.run.supervise(supervisor)
-        _ <- GrpcServer.resource(trabica, command).useForever
+        _ <- NodeApi.server(trabica, command).useForever
       } yield ()
     }
 

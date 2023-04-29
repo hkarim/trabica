@@ -6,7 +6,7 @@ import cats.syntax.all.*
 import trabica.model.*
 import trabica.rpc.*
 
-trait Node extends NodeApi {
+trait Node {
 
   def context: NodeContext
 
@@ -15,6 +15,12 @@ trait Node extends NodeApi {
   def run: IO[FiberIO[Unit]]
 
   def interrupt: IO[Unit]
+
+  def appendEntries(request: AppendEntriesRequest): IO[Boolean]
+
+  def vote(request: VoteRequest): IO[Boolean]
+
+  def join(request: JoinRequest): IO[JoinResponse.Status]
 
   def header: IO[Header] =
     for {

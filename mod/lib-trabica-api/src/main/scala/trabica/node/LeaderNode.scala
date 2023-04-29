@@ -3,11 +3,9 @@ package trabica.node
 import cats.effect.*
 import cats.effect.std.*
 import cats.syntax.all.*
-import io.grpc.Metadata
 import fs2.*
 import fs2.concurrent.SignallingRef
 import trabica.model.{Event, NodeState}
-import trabica.net.GrpcClient
 import trabica.rpc.*
 
 import scala.concurrent.duration.*
@@ -34,11 +32,11 @@ class LeaderNode(
 
   override def stateIO: IO[NodeState] = state.get
 
-  private def clients: Resource[IO, Vector[TrabicaFs2Grpc[IO, Metadata]]] =
+  private def clients: Resource[IO, Vector[NodeApi]] =
     for {
       currentState <- Resource.eval(state.get)
       clients <- currentState.peers.toVector.traverse { peer =>
-        GrpcClient.forPeer(prefix, peer)
+        NodeApi.client(prefix, peer)
       }
     } yield clients
 
@@ -51,7 +49,7 @@ class LeaderNode(
       f <- clients.use(heartbeatStream).supervise(supervisor) // start the stream
     } yield f
 
-  private def heartbeatStream(clients: Vector[TrabicaFs2Grpc[IO, Metadata]]): IO[Unit] =
+  private def heartbeatStream(clients: Vector[NodeApi]): IO[Unit] =
     Stream(clients)
       .interruptWhen(streamSignal)
       .filter(_.nonEmpty)
@@ -73,7 +71,7 @@ class LeaderNode(
                 peers = currentState.peers.toSeq,
               )
               responses <- cs.parTraverse { c =>
-                c.appendEntries(request, new Metadata)
+                c.appendEntries(request)
                   .timeout(100.milliseconds)
                   .attempt
                   .flatMap(onResponse)

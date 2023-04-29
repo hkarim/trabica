@@ -3,11 +3,9 @@ package trabica.node
 import cats.effect.*
 import cats.effect.std.*
 import cats.syntax.all.*
-import io.grpc.Metadata
 import fs2.*
 import fs2.concurrent.SignallingRef
 import trabica.model.{Event, NodeState}
-import trabica.net.GrpcClient
 import trabica.rpc.*
 import trabica.rpc.JoinResponse.Status
 
@@ -35,11 +33,11 @@ class OrphanNode(
 
   override def stateIO: IO[NodeState] = state.get
 
-  private def clients: Resource[IO, Vector[TrabicaFs2Grpc[IO, Metadata]]] =
+  private def clients: Resource[IO, Vector[NodeApi]] =
     for {
       s <- Resource.eval(state.get)
       clients <- s.peers.toVector.traverse { peer =>
-        GrpcClient.forPeer(prefix, peer)
+        NodeApi.client(prefix, peer)
       }
     } yield clients
 
@@ -52,24 +50,17 @@ class OrphanNode(
       f <- clients.use(joinStream).supervise(supervisor) // start the stream
     } yield f
 
-  private def joinStream(clients: Vector[TrabicaFs2Grpc[IO, Metadata]]): IO[Unit] =
+  private def joinStream(clients: Vector[NodeApi]): IO[Unit] =
     Stream
       .fixedRateStartImmediately[IO](2.seconds)
       .interruptWhen(streamSignal)
       .flatMap { _ =>
         Stream.eval {
           for {
-            messageId <- context.messageId.getAndUpdate(_.increment)
-            s         <- state.get
-            request = JoinRequest(
-              header = Header(
-                peer = s.self.some,
-                messageId = messageId.value,
-                term = s.currentTerm,
-              ).some
-            )
+            h <- header
+            request = JoinRequest(header = h.some)
             responses <- clients.parTraverse { c =>
-              c.join(request, new Metadata)
+              c.join(request)
                 .timeout(100.milliseconds)
                 .attempt
                 .flatMap(onJoin)

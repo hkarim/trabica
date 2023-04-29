@@ -3,11 +3,9 @@ package trabica.node
 import cats.effect.*
 import cats.effect.std.*
 import cats.syntax.all.*
-import io.grpc.Metadata
 import fs2.*
 import fs2.concurrent.SignallingRef
 import trabica.model.{Event, NodeError, NodeState}
-import trabica.net.GrpcClient
 import trabica.rpc.*
 
 import scala.concurrent.duration.*
@@ -34,11 +32,11 @@ class CandidateNode(
 
   override def stateIO: IO[NodeState] = state.get
 
-  private def clients: Resource[IO, Vector[TrabicaFs2Grpc[IO, Metadata]]] =
+  private def clients: Resource[IO, Vector[NodeApi]] =
     for {
       s <- Resource.eval(state.get)
       clients <- s.peers.toVector.traverse { peer =>
-        GrpcClient.forPeer(prefix, peer)
+        NodeApi.client(prefix, peer)
       }
     } yield clients
 
@@ -51,7 +49,7 @@ class CandidateNode(
       f <- clients.use(voteStream).supervise(supervisor) // start the stream
     } yield f
 
-  private def voteStream(clients: Vector[TrabicaFs2Grpc[IO, Metadata]]): IO[Unit] =
+  private def voteStream(clients: Vector[NodeApi]): IO[Unit] =
     Stream
       .fixedRateStartImmediately[IO](2.seconds)
       .interruptWhen(streamSignal)
@@ -59,18 +57,11 @@ class CandidateNode(
       .flatMap { _ =>
         Stream.eval {
           for {
-            _         <- logger.debug(s"$prefix requesting vote from ${clients.length} client(s)")
-            messageId <- context.messageId.getAndUpdate(_.increment)
-            s         <- state.get
-            request = VoteRequest(
-              header = Header(
-                peer = s.self.some,
-                messageId = messageId.value,
-                term = s.currentTerm,
-              ).some
-            )
+            _ <- logger.debug(s"$prefix requesting vote from ${clients.length} client(s)")
+            h <- header
+            request = VoteRequest(header = h.some)
             responses <- clients.parTraverse { c =>
-              c.vote(request, new Metadata)
+              c.vote(request)
                 .timeout(100.milliseconds)
                 .attempt
                 .flatMap(onVote)
