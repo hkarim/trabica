@@ -22,11 +22,9 @@ class Trabica(
 
   private def transition(oldState: NodeState, newState: NodeState, reason: StateTransitionReason): IO[FiberIO[Unit]] =
     for {
-      currentNode <- ref.get
-      _           <- logger.debug(s"transitioning [from: ${oldState.tag}, to: ${newState.tag}, reason: $reason]")
-      _           <- logger.debug(s"interrupting current node")
-      _           <- currentNode.interrupt
-      signal      <- Deferred[IO, Either[Throwable, Unit]]
+
+      _      <- logger.debug(s"transitioning [from: ${oldState.tag}, to: ${newState.tag}, reason: $reason]")
+      signal <- Deferred[IO, Either[Throwable, Unit]]
       f <- newState match {
         case state: NodeState.Orphan =>
           orphan(state, signal).supervise(supervisor)
@@ -57,8 +55,15 @@ class Trabica(
     signal: Interrupt,
     loggingPrefix: String,
   ): IO[Unit] = for {
-    _ <- logger.debug(s"$loggingPrefix starting node transition")
-    f <- ref.flatModify(_ => (newNode, newNode.run))
+    f <- ref.flatModify { oldNode =>
+      val io = for {
+        _       <- logger.debug(s"interrupting current node")
+        _       <- oldNode.interrupt
+        _       <- logger.debug(s"$loggingPrefix starting node transition")
+        spawned <- newNode.run
+      } yield spawned
+      (newNode, io)
+    }
     _ <- logger.debug(s"$loggingPrefix scheduled, awaiting terminate signal")
     _ <- signal.get
     _ <- f.cancel
