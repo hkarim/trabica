@@ -2,6 +2,7 @@ package trabica.node
 
 import cats.effect.*
 import cats.effect.std.{Mutex, Queue, Supervisor}
+import cats.syntax.all.*
 import com.typesafe.config.ConfigFactory
 import io.grpc.Metadata
 import fs2.*
@@ -114,32 +115,39 @@ class Trabica(
 
   override def appendEntries(request: AppendEntriesRequest, metadata: Metadata): IO[AppendEntriesResponse] =
     for {
-      server   <- ref.get
-      response <- server.appendEntries(request, metadata)
+      server  <- ref.get
+      header  <- server.header
+      success <- server.appendEntries(request)
+      response = AppendEntriesResponse(
+        header = header.some,
+        success = success,
+      )
     } yield response
 
   override def vote(request: VoteRequest, metadata: Metadata): IO[VoteResponse] =
     for {
-      server   <- ref.get
-      response <- server.vote(request, metadata)
+      server      <- ref.get
+      header      <- server.header
+      voteGranted <- server.vote(request)
+      response = VoteResponse(
+        header = header.some,
+        voteGranted = voteGranted,
+      )
     } yield response
 
   override def join(request: JoinRequest, metadata: Metadata): IO[JoinResponse] =
     for {
-      server   <- ref.get
-      response <- server.join(request, metadata)
+      server <- ref.get
+      header <- server.header
+      status <- server.join(request)
+      response = JoinResponse(
+        header = header.some,
+        status = status,
+      )
     } yield response
 }
 
 object Trabica {
-
-  private def instance(context: NodeContext, ref: Ref[IO, Node], supervisor: Supervisor[IO]): IO[Trabica] =
-    for {
-      trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
-      events <- Queue.unbounded[IO, Event]
-      mutex  <- Mutex[IO]
-      trabica = new Trabica(context, ref, events, supervisor, mutex, trace)
-    } yield trabica
 
   private def logging(level: scribe.Level): IO[Unit] = IO.delay {
     scribe.Logger.root
@@ -159,13 +167,16 @@ object Trabica {
           config = config,
           messageId = messageId,
         )
-        ref     <- Ref.of[IO, Node](Node.DeadNode)
-        trabica <- Trabica.instance(context, ref, supervisor)
-        fiber   <- trabica.run.supervise(supervisor)
-        state   <- Node.state(command)
-        _       <- trabica.events.offer(Event.NodeStateChanged(state))
-        _       <- GrpcServer.resource(trabica, command).useForever
-        _       <- fiber.cancel
+        state  <- Node.state(command)
+        events <- Queue.unbounded[IO, Event]
+        trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
+        node   <- Node.instance(context, events, supervisor, trace, state)
+        ref    <- Ref.of[IO, Node](node)
+        mutex  <- Mutex[IO]
+        trabica = new Trabica(context, ref, events, supervisor, mutex, trace)
+        _ <- node.run.supervise(supervisor)
+        _ <- trabica.run.supervise(supervisor)
+        _ <- GrpcServer.resource(trabica, command).useForever
       } yield ()
     }
 

@@ -32,11 +32,13 @@ class LeaderNode(
     streamSignal.set(true) >> signal.complete(()).void >>
       logger.debug(s"$prefix interrupted")
 
+  override def stateIO: IO[NodeState] = state.get
+
   private def clients: Resource[IO, Vector[TrabicaFs2Grpc[IO, Metadata]]] =
     for {
       currentState <- Resource.eval(state.get)
       clients <- currentState.peers.toVector.traverse { peer =>
-        GrpcClient.forPeer(peer)
+        GrpcClient.forPeer(prefix, peer)
       }
     } yield clients
 
@@ -120,59 +122,34 @@ class LeaderNode(
   def run: IO[FiberIO[Unit]] =
     clients.use(heartbeatStream).supervise(supervisor)
 
-  override def appendEntries(request: AppendEntriesRequest, metadata: Metadata): IO[AppendEntriesResponse] =
+  override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     for {
-      messageId    <- context.messageId.getAndUpdate(_.increment)
       currentState <- state.get
-      response = AppendEntriesResponse(
-        header = Header(
-          peer = currentState.self.some,
-          messageId = messageId.value,
-          term = currentState.currentTerm,
-        ).some,
-      )
-      header <- request.header.required
-      _      <- Node.termCheck(header, currentState, events)
-    } yield response
+      header       <- request.header.required
+      _            <- Node.termCheck(header, currentState, events)
+    } yield false
 
-  override def join(request: JoinRequest, metadata: Metadata): IO[JoinResponse] =
+  override def join(request: JoinRequest): IO[JoinResponse.Status] =
     for {
       peerHeader   <- request.header.required
       peer         <- peerHeader.peer.required
       _            <- logger.debug(s"$prefix peer ${peer.host}:${peer.port} joining")
-      messageId    <- context.messageId.getAndUpdate(_.increment)
       currentState <- state.get
-      response = JoinResponse(
-        header = Header(
-          peer = currentState.self.some,
-          messageId = messageId.value,
-          term = currentState.currentTerm,
-        ).some,
-        status = JoinResponse.Status.Accepted(
-          JoinResponse.Accepted()
-        )
+      status = JoinResponse.Status.Accepted(
+        JoinResponse.Accepted()
       )
       newState = currentState.copy(peers = currentState.peers + peer) // change the peers
       _ <- peersChanged(newState)
-    } yield response
+    } yield status
 
-  override def vote(request: VoteRequest, metadata: Metadata): IO[VoteResponse] =
+  override def vote(request: VoteRequest): IO[Boolean] =
     for {
-      messageId    <- context.messageId.getAndUpdate(_.increment)
       currentState <- state.get
       header       <- request.header.required
       _ <- logger.debug(
         s"$prefix vote requested. votedFor=${currentState.votedFor}, term=${currentState.currentTerm}, request.term=${header.term}"
       )
       voteGranted = currentState.votedFor.isEmpty && header.term > currentState.currentTerm
-      response = VoteResponse(
-        header = Header(
-          peer = currentState.self.some,
-          messageId = messageId.value,
-          term = currentState.currentTerm,
-        ).some,
-        voteGranted = voteGranted
-      )
       _ <-
         if voteGranted then {
           for {
@@ -180,7 +157,7 @@ class LeaderNode(
             _    <- state.set(currentState.copy(votedFor = peer.some))
           } yield ()
         } else IO.unit
-    } yield response
+    } yield voteGranted
 
 }
 

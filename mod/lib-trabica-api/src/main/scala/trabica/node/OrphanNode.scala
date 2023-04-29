@@ -26,18 +26,20 @@ class OrphanNode(
   private final val logger = scribe.cats[IO]
 
   private final val id: Int = trace.orphanId
-  
+
   private final val prefix: String = s"[orphan-$id]"
 
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >> signal.complete(()).void >>
       logger.debug(s"$prefix interrupted")
 
+  override def stateIO: IO[NodeState] = state.get
+
   private def clients: Resource[IO, Vector[TrabicaFs2Grpc[IO, Metadata]]] =
     for {
       s <- Resource.eval(state.get)
       clients <- s.peers.toVector.traverse { peer =>
-        GrpcClient.forPeer(peer)
+        GrpcClient.forPeer(prefix, peer)
       }
     } yield clients
 
@@ -141,49 +143,19 @@ class OrphanNode(
   def run: IO[FiberIO[Unit]] =
     clients.use(joinStream).supervise(supervisor)
 
-  override def appendEntries(request: AppendEntriesRequest, metadata: Metadata): IO[AppendEntriesResponse] =
-    for {
-      messageId <- context.messageId.getAndUpdate(_.increment)
-      s         <- state.get
-      response = AppendEntriesResponse(
-        header = Header(
-          peer = s.self.some,
-          messageId = messageId.value,
-          term = s.currentTerm,
-        ).some,
-        success = false, // cannot append entries
-      )
-    } yield response
+  override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
+    IO.pure(false)
 
-  override def vote(request: VoteRequest, metadata: Metadata): IO[VoteResponse] =
-    for {
-      messageId <- context.messageId.getAndUpdate(_.increment)
-      s         <- state.get
-      response = VoteResponse(
-        header = Header(
-          peer = s.self.some,
-          messageId = messageId.value,
-          term = s.currentTerm,
-        ).some,
-        voteGranted = false, // cannot vote
-      )
-    } yield response
+  override def vote(request: VoteRequest): IO[Boolean] =
+    IO.pure(false)
 
-  override def join(request: JoinRequest, metadata: Metadata): IO[JoinResponse] =
+  override def join(request: JoinRequest): IO[JoinResponse.Status] =
     for {
-      messageId <- context.messageId.getAndUpdate(_.increment)
-      s         <- state.get
-      response = JoinResponse(
-        header = Header(
-          peer = s.self.some,
-          messageId = messageId.value,
-          term = s.currentTerm,
-        ).some,
-        status = JoinResponse.Status.UnknownLeader(
-          JoinResponse.UnknownLeader(knownPeers = s.peers.toSeq)
-        )
+      s <- state.get
+      status = JoinResponse.Status.UnknownLeader(
+        JoinResponse.UnknownLeader(knownPeers = s.peers.toSeq)
       )
-    } yield response
+    } yield status
 
 }
 

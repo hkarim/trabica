@@ -1,16 +1,31 @@
 package trabica.node
 
 import cats.effect.*
-import cats.effect.std.{Queue, UUIDGen}
-import io.grpc.Metadata
+import cats.effect.std.{Queue, Supervisor, UUIDGen}
+import cats.syntax.all.*
 import trabica.model.*
 import trabica.rpc.*
 
-trait Node extends TrabicaFs2Grpc[IO, Metadata] {
+trait Node extends NodeApi {
+
+  def context: NodeContext
+
+  def stateIO: IO[NodeState]
 
   def run: IO[FiberIO[Unit]]
 
   def interrupt: IO[Unit]
+
+  def header: IO[Header] =
+    for {
+      messageId <- context.messageId.getAndUpdate(_.increment)
+      state     <- stateIO
+      h = Header(
+        peer = state.self.some,
+        messageId = messageId.value,
+        term = state.currentTerm,
+      )
+    } yield h
 
 }
 
@@ -18,18 +33,93 @@ object Node {
 
   private final val logger = scribe.cats[IO]
 
-  object DeadNode extends Node {
-    override val run: IO[FiberIO[Unit]] =
-      IO.raiseError(NodeError.Uninitialized)
-    override val interrupt: IO[Unit] =
-      IO.unit
-    override def appendEntries(request: AppendEntriesRequest, ctx: Metadata): IO[AppendEntriesResponse] =
-      IO.raiseError(NodeError.Uninitialized)
-    override def vote(request: VoteRequest, ctx: Metadata): IO[VoteResponse] =
-      IO.raiseError(NodeError.Uninitialized)
-    override def join(request: JoinRequest, ctx: Metadata): IO[JoinResponse] =
-      IO.raiseError(NodeError.Uninitialized)
-  }
+  def instance(
+    context: NodeContext,
+    events: Queue[IO, Event],
+    supervisor: Supervisor[IO],
+    trace: Ref[IO, NodeTrace],
+    state: NodeState
+  ): IO[Node] =
+    state match {
+      case state: NodeState.Orphan =>
+        for {
+          s <- Deferred[IO, Unit]
+          n <- orphan(context, events, supervisor, trace, s, state)
+        } yield n
+      case state: NodeState.NonVoter => ???
+      case state: NodeState.Follower =>
+        for {
+          s <- Deferred[IO, Unit]
+          n <- follower(context, events, supervisor, trace, s, state)
+        } yield n
+      case state: NodeState.Candidate =>
+        for {
+          s <- Deferred[IO, Unit]
+          n <- candidate(context, events, supervisor, trace, s, state)
+        } yield n
+      case state: NodeState.Leader =>
+        for {
+          s <- Deferred[IO, Unit]
+          n <- leader(context, events, supervisor, trace, s, state)
+        } yield n
+      case state: NodeState.Joint => ???
+    }
+
+  private def orphan(
+    context: NodeContext,
+    events: Queue[IO, Event],
+    supervisor: Supervisor[IO],
+    trace: Ref[IO, NodeTrace],
+    signal: Deferred[IO, Unit],
+    state: NodeState.Orphan,
+  ): IO[Node] =
+    for {
+      r <- Ref.of[IO, NodeState.Orphan](state)
+      t <- trace.incrementOrphan
+      n <- OrphanNode.instance(context, r, events, signal, supervisor, t)
+    } yield n
+
+  private def follower(
+    context: NodeContext,
+    events: Queue[IO, Event],
+    supervisor: Supervisor[IO],
+    trace: Ref[IO, NodeTrace],
+    signal: Deferred[IO, Unit],
+    state: NodeState.Follower,
+  ): IO[Node] =
+    for {
+      r <- Ref.of[IO, NodeState.Follower](state)
+      t <- trace.incrementFollower
+      n <- FollowerNode.instance(context, r, events, signal, supervisor, t)
+    } yield n
+
+  private def candidate(
+    context: NodeContext,
+    events: Queue[IO, Event],
+    supervisor: Supervisor[IO],
+    trace: Ref[IO, NodeTrace],
+    signal: Deferred[IO, Unit],
+    state: NodeState.Candidate,
+  ): IO[Node] =
+    for {
+      r <- Ref.of[IO, NodeState.Candidate](state)
+      t <- trace.incrementCandidate
+      n <- CandidateNode.instance(context, r, events, signal, supervisor, t)
+    } yield n
+
+  private def leader(
+    context: NodeContext,
+    events: Queue[IO, Event],
+    supervisor: Supervisor[IO],
+    trace: Ref[IO, NodeTrace],
+    signal: Deferred[IO, Unit],
+    state: NodeState.Leader,
+  ): IO[Node] =
+    for {
+      r <- Ref.of[IO, NodeState.Leader](state)
+      t <- trace.incrementLeader
+      n <- LeaderNode.instance(context, r, events, signal, supervisor, t)
+    } yield n
 
   def termCheck(header: Header, currentState: NodeState, events: Queue[IO, Event]): IO[Unit] =
     for {
@@ -57,7 +147,7 @@ object Node {
         bootstrap(v)
     case v: CliCommand.Join =>
       logger.debug("initiating node state in orphan mode") >>
-        orphan(v)
+        join(v)
   }
 
   private def bootstrap(command: CliCommand.Bootstrap): IO[NodeState] = for {
@@ -79,7 +169,7 @@ object Node {
     )
   } yield state
 
-  private def orphan(command: CliCommand.Join): IO[NodeState] = for {
+  private def join(command: CliCommand.Join): IO[NodeState] = for {
     uuid <- UUIDGen.randomUUID[IO]
     id = NodeId.fromUUID(uuid)
     state = NodeState.Orphan(
