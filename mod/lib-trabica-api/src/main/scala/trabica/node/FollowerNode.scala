@@ -38,15 +38,18 @@ class FollowerNode(
     Stream
       .fixedRate[IO](heartbeatStreamTimeout.milliseconds)
       .interruptWhen(signal)
-      .evalMap(_ => heartbeat.get)
       .evalTap(_ => logger.debug(s"$prefix heartbeat wake up"))
-      .evalMap {
-        case Some(_) =>
-          logger.debug(s"$prefix heartbeat good to go") >>
-            heartbeat.set(None)
-        case None =>
-          logger.debug(s"$prefix heartbeat no elements, will timeout") >>
-            timeout
+      .evalMap { _ =>
+        heartbeat.flatModify[Unit] {
+          case Some(_) =>
+            (None, logger.debug(s"$prefix heartbeat good to go"))
+          case None =>
+            (
+              None,
+              logger.debug(s"$prefix heartbeat no elements, will timeout") >>
+                timeout
+            )
+        }
       }
       .handleErrorWith { e =>
         Stream.eval {

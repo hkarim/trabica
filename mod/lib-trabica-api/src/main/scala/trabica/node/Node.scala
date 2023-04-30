@@ -32,6 +32,16 @@ trait Node {
       )
     } yield h
 
+  def header(state: NodeState): IO[Header] =
+    for {
+      messageId <- context.messageId.getAndUpdate(_.increment)
+      h = Header(
+        peer = state.self.some,
+        messageId = messageId.value,
+        term = state.currentTerm.value,
+      )
+    } yield h
+
 }
 
 object Node {

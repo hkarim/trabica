@@ -5,9 +5,9 @@ import scala.annotation.targetName
 opaque type Term = Long
 
 object Term {
-  
+
   final val zero: Term = 0L
-  
+
   def of(value: Long): Term = value
 
   extension (self: Term) {
@@ -20,5 +20,3 @@ object Term {
     def >(that: Term): Boolean = self > that
   }
 }
-
-

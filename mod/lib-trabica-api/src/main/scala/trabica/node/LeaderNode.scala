@@ -44,7 +44,9 @@ class LeaderNode(
     for {
       _            <- logger.debug(s"$prefix peers changed, restarting heartbeat stream")
       currentState <- state.get
-      _            <- events.offer(Event.NodeStateChanged(currentState, newState, reason = StateTransitionReason.ConfigurationChanged))
+      _ <- events.offer(
+        Event.NodeStateChanged(currentState, newState, reason = StateTransitionReason.ConfigurationChanged)
+      )
     } yield ()
 
   private def heartbeatStream(clients: Vector[NodeApi]): IO[Unit] =
@@ -59,14 +61,10 @@ class LeaderNode(
           .evalTap(_ => logger.debug(s"$prefix heartbeat stream wake up"))
           .evalMap { _ =>
             for {
-              messageId    <- context.messageId.getAndUpdate(_.increment)
               currentState <- state.get
+              h <- header(currentState)
               request = AppendEntriesRequest(
-                header = Header(
-                  peer = currentState.self.some,
-                  messageId = messageId.value,
-                  term = currentState.currentTerm.value,
-                ).some,
+                header = h.some,
                 peers = currentState.peers.toSeq,
               )
               responses <- cs.parTraverse { c =>

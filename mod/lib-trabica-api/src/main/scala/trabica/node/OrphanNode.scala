@@ -39,9 +39,9 @@ class OrphanNode(
 
   private def peersChanged(newState: NodeState.Orphan): IO[Unit] =
     for {
-      _ <- logger.debug(s"$prefix peers changed, restarting join stream")
+      _            <- logger.debug(s"$prefix peers changed, restarting join stream")
       currentState <- state.get
-      _ <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged))
+      _            <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged))
     } yield ()
 
   private def joinStream(clients: Vector[NodeApi]): IO[Unit] =

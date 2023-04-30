@@ -15,7 +15,7 @@ object CliCommand {
 
   private final def bootstrapOpts: Opts[Bootstrap] =
     Opts.subcommand("bootstrap", "start a new trabica cluster with this initial bootstrap node") {
-      val hostOpt   = Opts.option[String]("host", "node host")
+      val hostOpt = Opts.option[String]("host", "node host")
       val portOpt = Opts.option[Int]("port", "node port")
       (hostOpt, portOpt).mapN {
         case (host, port) => Bootstrap(host, port)
@@ -26,7 +26,7 @@ object CliCommand {
 
   private final def joinOpts: Opts[Join] =
     Opts.subcommand("join", "join a trabica cluster") {
-      val hostOpt   = Opts.option[String]("host", "node host")
+      val hostOpt = Opts.option[String]("host", "node host")
       val portOpt = Opts.option[Int]("port", "node port")
 
       val peerAddressOpt: Opts[(String, Int)] =

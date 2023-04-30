@@ -54,7 +54,9 @@ class CandidateNode(
     for {
       _            <- logger.debug(s"$prefix peers changed, restarting vote stream")
       currentState <- state.get
-      _            <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged))
+      _ <- events.offer(
+        Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged)
+      )
     } yield ()
 
   private def timeout: IO[Unit] =
@@ -62,7 +64,9 @@ class CandidateNode(
       _ <- logger.debug(s"$prefix vote stream timed out, restarting election")
       s <- state.updateAndGet(s => s.copy(currentTerm = s.currentTerm.increment))
       _ <- logger.debug(s"$prefix starting vote stream with term ${s.currentTerm}")
-      _ <- events.offer(Event.NodeStateChanged(s, s, StateTransitionReason.ConfigurationChanged))
+      _ <- events.offer(
+        Event.NodeStateChanged(s, s, StateTransitionReason.ConfigurationChanged)
+      )
     } yield ()
 
   private def voteStream(nodes: Vector[NodeApi]): IO[Unit] =

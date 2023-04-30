@@ -12,5 +12,3 @@ object Index {
     def increment: Index = self + 1
   }
 }
-
-

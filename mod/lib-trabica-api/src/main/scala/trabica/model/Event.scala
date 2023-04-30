@@ -6,5 +6,6 @@ object Event {
   case class NodeStateChanged(
     oldState: NodeState,
     newState: NodeState,
-    reason: StateTransitionReason) extends Event
+    reason: StateTransitionReason
+  ) extends Event
 }
