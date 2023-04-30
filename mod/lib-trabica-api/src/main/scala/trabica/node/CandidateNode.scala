@@ -120,24 +120,33 @@ class CandidateNode(
         logger.debug(s"$prefix vote response error ${e.getMessage}, ignoring")
       case Right(VoteResponse(Some(header), true, _)) =>
         for {
-          peer         <- header.peer.required
-          _            <- logger.debug(s"$prefix vote granted from peer ${peer.host}:${peer.port}")
-          currentState <- state.updateAndGet(s => s.copy(votes = s.votes + peer))
-          peers = currentState.peers
-          _ <-
-            if currentState.votes.size >= math.ceil(peers.size / 2) + 1 then {
-              val newState = NodeState.Leader(
-                self = currentState.self,
-                peers = currentState.peers,
-                currentTerm = currentState.currentTerm,
-                votedFor = None,
-                commitIndex = currentState.commitIndex,
-                lastApplied = currentState.lastApplied,
-                nextIndex = Map.empty,
-                matchIndex = Map.empty,
-              )
-              events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.ElectedLeader))
-            } else IO.unit
+          peer <- header.peer.required
+          _    <- logger.debug(s"$prefix vote granted from peer ${peer.host}:${peer.port}")
+          _ <- state.flatModify { currentState =>
+            val peers            = currentState.peers
+            val votes            = currentState.votes + peer
+            val currentlyElected = currentState.elected
+            val newlyElected     = votes.size >= math.ceil(peers.size / 2) + 1
+            // the purpose here is to prevent firing state change events once we're already elected
+            // thus preventing unnecessary node transition more than once
+            val io =
+              if newlyElected && !currentlyElected then {
+                val newState = NodeState.Leader(
+                  self = currentState.self,
+                  peers = currentState.peers,
+                  currentTerm = currentState.currentTerm,
+                  votedFor = None,
+                  commitIndex = currentState.commitIndex,
+                  lastApplied = currentState.lastApplied,
+                  nextIndex = Map.empty,
+                  matchIndex = Map.empty,
+                )
+                events.offer(
+                  Event.NodeStateChanged(currentState, newState, StateTransitionReason.ElectedLeader)
+                )
+              } else IO.unit
+            (currentState.copy(votes = votes, elected = newlyElected), io)
+          }
         } yield ()
       case Right(VoteResponse(Some(header), false, _)) =>
         for {

@@ -8,6 +8,8 @@ import trabica.rpc.*
 
 trait NodeApi {
 
+  def peer: Peer
+
   def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse]
 
   def vote(request: VoteRequest): IO[VoteResponse]
@@ -18,7 +20,7 @@ trait NodeApi {
 
 object NodeApi {
 
-  private class GrpcClientNodeApi(client: TrabicaFs2Grpc[IO, Metadata]) extends NodeApi {
+  private class GrpcClientNodeApi(val peer: Peer, client: TrabicaFs2Grpc[IO, Metadata]) extends NodeApi {
 
     override def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse] =
       client.appendEntries(request, new Metadata)
@@ -46,7 +48,7 @@ object NodeApi {
   def client(prefix: String, peer: Peer): Resource[IO, NodeApi] =
     GrpcClient
       .forPeer(prefix, peer)
-      .map(c => new GrpcClientNodeApi(c))
+      .map(c => new GrpcClientNodeApi(peer, c))
 
   def server(api: NodeApi, command: CliCommand): Resource[IO, NodeApi] =
     GrpcServer

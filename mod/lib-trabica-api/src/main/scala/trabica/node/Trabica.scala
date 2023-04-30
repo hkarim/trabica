@@ -17,6 +17,8 @@ class Trabica(
 
   private final val logger = scribe.cats[IO]
 
+  final val peer: Peer = context.peer
+
   def run: IO[Unit] =
     eventStream
 
@@ -65,8 +67,15 @@ class Trabica(
     }
     _ <- logger.debug(s"$loggingPrefix scheduled, awaiting terminate signal")
     _ <- signal.get
-    _ <- f.cancel
-    _ <- logger.debug(s"$loggingPrefix terminated")
+    o <- f.join
+    _ <- o match {
+      case Outcome.Succeeded(_) =>
+        logger.debug(s"$loggingPrefix terminated successfully")
+      case Outcome.Errored(e) =>
+        logger.debug(s"$loggingPrefix terminated with error ${e.getMessage}")
+      case Outcome.Canceled() =>
+        logger.debug(s"$loggingPrefix canceled")
+    }
   } yield ()
 
   private def orphan(newState: NodeState.Orphan, s: Interrupt): IO[Unit] =
@@ -157,6 +166,7 @@ object Trabica {
         messageId <- Ref.of[IO, MessageId](MessageId.zero)
         context = NodeContext(
           config = config,
+          peer = Peer(command.host, command.port),
           messageId = messageId,
         )
         state  <- Node.state(command)

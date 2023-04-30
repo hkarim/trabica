@@ -64,6 +64,7 @@ object NodeState {
     commitIndex: Index,
     lastApplied: Index,
     votes: Set[Peer],
+    elected: Boolean,
   ) extends NodeState {
     override val tag: NodeStateTag = NodeStateTag.Candidate
   }

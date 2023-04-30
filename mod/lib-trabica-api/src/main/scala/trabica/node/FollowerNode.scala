@@ -81,6 +81,7 @@ class FollowerNode(
         commitIndex = currentState.commitIndex,
         lastApplied = currentState.lastApplied,
         votes = Set(currentState.self),
+        elected = false,
       )
       - <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.NoHeartbeat))
     } yield ()

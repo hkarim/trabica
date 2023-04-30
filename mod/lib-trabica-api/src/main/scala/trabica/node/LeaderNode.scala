@@ -62,7 +62,7 @@ class LeaderNode(
           .evalMap { _ =>
             for {
               currentState <- state.get
-              h <- header(currentState)
+              h            <- header(currentState)
               request = AppendEntriesRequest(
                 header = h.some,
                 peers = currentState.peers.toSeq,
@@ -71,7 +71,7 @@ class LeaderNode(
                 c.appendEntries(request)
                   .timeout(100.milliseconds)
                   .attempt
-                  .flatMap(onResponse)
+                  .flatMap(r => onResponse(c.peer, r))
               }
             } yield responses
           }
@@ -88,10 +88,10 @@ class LeaderNode(
       .compile
       .drain
 
-  private def onResponse(response: Either[Throwable, AppendEntriesResponse]): IO[Unit] =
+  private def onResponse(peer: Peer, response: Either[Throwable, AppendEntriesResponse]): IO[Unit] =
     response match {
       case Left(e) =>
-        logger.debug(s"$prefix no response ${e.getMessage}")
+        logger.debug(s"$prefix no response from peer ${peer.host}:${peer.port}, error: ${e.getMessage}")
       case Right(r) =>
         for {
           header       <- r.header.required
