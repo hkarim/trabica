@@ -34,6 +34,15 @@ class FollowerNode(
 
   override def stateIO: IO[NodeState] = state.get
 
+  private def peersChanged(newState: NodeState.Follower): IO[Unit] =
+    for {
+      _            <- logger.debug(s"$prefix peers changed, restarting follower")
+      currentState <- state.get
+      _ <- events.offer(
+        Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged)
+      )
+    } yield ()
+
   private def heartbeatStream: IO[Unit] =
     Stream
       .fixedRate[IO](heartbeatStreamTimeout.milliseconds)
@@ -111,6 +120,11 @@ class FollowerNode(
       status = JoinResponse.Status.Forward(
         JoinResponse.Forward(leader = currentState.leader.some)
       )
+      _ <-
+        if !currentState.peers.contains(peer) then {
+          val newState = currentState.copy(peers = currentState.peers + peer)
+          peersChanged(newState)
+        } else IO.unit
     } yield status
 
   override def vote(request: VoteRequest): IO[Boolean] =

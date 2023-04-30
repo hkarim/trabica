@@ -42,7 +42,7 @@ class LeaderNode(
 
   private def peersChanged(newState: NodeState.Leader): IO[Unit] =
     for {
-      _            <- logger.debug(s"$prefix peers changed, restarting heartbeat stream")
+      _            <- logger.debug(s"$prefix peers changed, restarting leader")
       currentState <- state.get
       _ <- events.offer(
         Event.NodeStateChanged(currentState, newState, reason = StateTransitionReason.ConfigurationChanged)
@@ -119,8 +119,11 @@ class LeaderNode(
       status = JoinResponse.Status.Accepted(
         JoinResponse.Accepted()
       )
-      newState = currentState.copy(peers = currentState.peers + peer) // change the peers
-      _ <- peersChanged(newState)
+      _ <-
+        if !currentState.peers.contains(peer) then {
+          val newState = currentState.copy(peers = currentState.peers + peer)
+          peersChanged(newState)
+        } else IO.unit
     } yield status
 
   override def vote(request: VoteRequest): IO[Boolean] =

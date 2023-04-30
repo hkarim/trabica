@@ -159,7 +159,7 @@ object Trabica {
   }.void
 
   def run(command: CliCommand): IO[Unit] =
-    Supervisor[IO].use { supervisor =>
+    Supervisor[IO](await = false).use { supervisor =>
       for {
         config    <- IO.blocking(ConfigFactory.load())
         _         <- logging(scribe.Level(config.getString("trabica.log.level")))

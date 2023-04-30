@@ -39,7 +39,7 @@ class OrphanNode(
 
   private def peersChanged(newState: NodeState.Orphan): IO[Unit] =
     for {
-      _            <- logger.debug(s"$prefix peers changed, restarting join stream")
+      _            <- logger.debug(s"$prefix peers changed, restarting orphan")
       currentState <- state.get
       _            <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged))
     } yield ()
@@ -135,10 +135,17 @@ class OrphanNode(
 
   override def join(request: JoinRequest): IO[JoinResponse.Status] =
     for {
-      s <- state.get
+      currentState <- state.get
+      header       <- request.header.required
+      peer         <- header.peer.required
       status = JoinResponse.Status.UnknownLeader(
-        JoinResponse.UnknownLeader(knownPeers = s.peers.toSeq)
+        JoinResponse.UnknownLeader(knownPeers = currentState.peers.toSeq)
       )
+      _ <-
+        if !currentState.peers.contains(peer) then {
+          val newState = currentState.copy(peers = currentState.peers + peer)
+          peersChanged(newState)
+        } else IO.unit
     } yield status
 
 }

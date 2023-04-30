@@ -52,7 +52,7 @@ class CandidateNode(
 
   private def peersChanged(newState: NodeState.Candidate): IO[Unit] =
     for {
-      _            <- logger.debug(s"$prefix peers changed, restarting vote stream")
+      _            <- logger.debug(s"$prefix peers changed, restarting candidate")
       currentState <- state.get
       _ <- events.offer(
         Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged)
@@ -191,8 +191,11 @@ class CandidateNode(
       response = JoinResponse.Status.UnknownLeader(
         JoinResponse.UnknownLeader(knownPeers = currentState.peers.toSeq)
       )
-      newState = currentState.copy(peers = currentState.peers + peer)
-      _ <- peersChanged(newState)
+      _ <-
+        if !currentState.peers.contains(peer) then {
+          val newState = currentState.copy(peers = currentState.peers + peer)
+          peersChanged(newState)
+        } else IO.unit
     } yield response
 
   override def vote(request: VoteRequest): IO[Boolean] =
