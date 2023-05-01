@@ -4,6 +4,7 @@ import cats.effect.*
 import cats.effect.std.*
 import cats.syntax.all.*
 import fs2.*
+import fs2.concurrent.SignallingRef
 import trabica.model.*
 
 import scala.concurrent.TimeoutException
@@ -14,6 +15,7 @@ class CandidateNode(
   val state: Ref[IO, NodeState.Candidate],
   val events: Queue[IO, Event],
   val signal: Interrupt,
+  val streamSignal: SignallingRef[IO, Boolean],
   val supervisor: Supervisor[IO],
   val trace: NodeTrace,
 ) extends Node {
@@ -37,7 +39,8 @@ class CandidateNode(
     context.config.getLong("trabica.candidate.vote-request.timeout")
 
   override def interrupt: IO[Unit] =
-    signal.complete(Right(())).void >>
+    streamSignal.set(true) >>
+      signal.complete(Right(())).void >>
       logger.debug(s"$prefix interrupted")
 
   override def stateIO: IO[NodeState] = state.get
@@ -49,15 +52,6 @@ class CandidateNode(
         NodeApi.client(prefix, peer)
       }
     } yield clients
-
-  private def peersChanged(newState: NodeState.Candidate): IO[Unit] =
-    for {
-      _            <- logger.debug(s"$prefix peers changed, restarting candidate")
-      currentState <- state.get
-      _ <- events.offer(
-        Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged)
-      )
-    } yield ()
 
   private def timeout: IO[Unit] =
     for {
@@ -77,7 +71,7 @@ class CandidateNode(
       .flatMap { t =>
         Stream
           .fixedRateStartImmediately[IO](voteStreamRate.milliseconds)
-          .interruptWhen(signal)
+          .interruptWhen(streamSignal)
           .evalTap(_ => logger.debug(s"$prefix vote stream wake up"))
           .evalMap { _ =>
             for {
@@ -88,7 +82,7 @@ class CandidateNode(
                 n.vote(request)
                   .timeout(voteRequestTimeout.milliseconds)
                   .attempt
-                  .flatMap(onVote)
+                  .flatMap(r => onVote(n.peer, r))
               }
             } yield responses
           }
@@ -114,10 +108,10 @@ class CandidateNode(
           }
       }
 
-  private def onVote(response: Either[Throwable, VoteResponse]): IO[Unit] =
+  private def onVote(peer: Peer, response: Either[Throwable, VoteResponse]): IO[Unit] =
     response match {
       case Left(e) =>
-        logger.debug(s"$prefix vote response error ${e.getMessage}, ignoring")
+        logger.debug(s"$prefix vote response error from peer ${peer.host}:${peer.port},  ${e.getMessage}, ignoring")
       case Right(VoteResponse(Some(header), true, _)) =>
         for {
           peer <- header.peer.required
@@ -128,6 +122,7 @@ class CandidateNode(
             val currentlyElected = currentState.elected
             val newlyElected     = votes.size >= math.ceil(peers.size / 2) + 1
             // the purpose here is to prevent firing state change events once we're already elected
+            // while the node is still in transition
             // thus preventing unnecessary node transition more than once
             val io =
               if newlyElected && !currentlyElected then {
@@ -191,11 +186,18 @@ class CandidateNode(
       response = JoinResponse.Status.UnknownLeader(
         JoinResponse.UnknownLeader(knownPeers = currentState.peers.toSeq)
       )
-      _ <-
+      _ <- state.flatModify { currentState =>
+        val newState = currentState.copy(peers = currentState.peers + peer)
         if !currentState.peers.contains(peer) then {
-          val newState = currentState.copy(peers = currentState.peers + peer)
-          peersChanged(newState)
-        } else IO.unit
+          val restart = for {
+            _ <- streamSignal.set(true)
+            _ <- streamSignal.set(false)
+            f <- run
+          } yield f
+          (currentState, restart)
+        } else (newState, IO.unit)
+      }
+
     } yield response
 
   override def vote(request: VoteRequest): IO[Boolean] =
@@ -210,14 +212,16 @@ object CandidateNode {
     signal: Interrupt,
     supervisor: Supervisor[IO],
     trace: NodeTrace,
-  ): IO[CandidateNode] = IO.pure {
-    new CandidateNode(
+  ): IO[CandidateNode] = for {
+    streamSignal <- SignallingRef.of[IO, Boolean](false)
+    node = new CandidateNode(
       context,
       state,
       events,
       signal,
+      streamSignal,
       supervisor,
       trace,
     )
-  }
+  } yield node
 }

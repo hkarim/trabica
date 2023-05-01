@@ -4,6 +4,7 @@ import cats.effect.*
 import cats.effect.std.*
 import cats.syntax.all.*
 import fs2.*
+import fs2.concurrent.SignallingRef
 import trabica.model.*
 
 import scala.concurrent.duration.*
@@ -13,6 +14,7 @@ class LeaderNode(
   val state: Ref[IO, NodeState.Leader],
   val events: Queue[IO, Event],
   val signal: Interrupt,
+  val streamSignal: SignallingRef[IO, Boolean],
   val supervisor: Supervisor[IO],
   val trace: NodeTrace,
 ) extends Node {
@@ -27,7 +29,8 @@ class LeaderNode(
     context.config.getLong("trabica.leader.heartbeat-stream.rate")
 
   override def interrupt: IO[Unit] =
-    signal.complete(Right(())).void >>
+    streamSignal.set(true) >>
+      signal.complete(Right(())).void >>
       logger.debug(s"$prefix interrupted")
 
   override def stateIO: IO[NodeState] = state.get
@@ -40,25 +43,22 @@ class LeaderNode(
       }
     } yield clients
 
-  private def peersChanged(newState: NodeState.Leader): IO[Unit] =
-    for {
-      _            <- logger.debug(s"$prefix peers changed, restarting leader")
-      currentState <- state.get
-      _ <- events.offer(
-        Event.NodeStateChanged(currentState, newState, reason = StateTransitionReason.ConfigurationChanged)
-      )
-    } yield ()
+  private def restartHeartbeatStream: IO[FiberIO[Unit]] =
+    streamSignal.set(true) >>
+      streamSignal.set(false) >>
+      logger.debug(s"$prefix heartbeat stream restarting") >>
+      clients.use(heartbeatStream).supervise(supervisor)
 
   private def heartbeatStream(clients: Vector[NodeApi]): IO[Unit] =
     Stream(clients)
-      .interruptWhen(signal)
+      .interruptWhen(streamSignal)
       .filter(_.nonEmpty)
       .evalTap(_ => logger.debug(s"$prefix starting heartbeat stream"))
       .flatMap { cs =>
         Stream
           .fixedRateStartImmediately[IO](heartbeatStreamRate.milliseconds)
-          .interruptWhen(signal)
-          .evalTap(_ => logger.debug(s"$prefix heartbeat stream wake up"))
+          .interruptWhen(streamSignal)
+          .evalTap(_ => logger.trace(s"$prefix heartbeat stream wake up"))
           .evalMap { _ =>
             for {
               currentState <- state.get
@@ -68,10 +68,11 @@ class LeaderNode(
                 peers = currentState.peers.toSeq,
               )
               responses <- cs.parTraverse { c =>
-                c.appendEntries(request)
-                  .timeout(100.milliseconds)
-                  .attempt
-                  .flatMap(r => onResponse(c.peer, r))
+                logger.trace(s"$prefix sending heartbeat to ${c.peer.host}:${c.peer.port}") >>
+                  c.appendEntries(request)
+                    .timeout(100.milliseconds)
+                    .attempt
+                    .flatMap(r => onResponse(c.peer, r))
               }
             } yield responses
           }
@@ -91,7 +92,7 @@ class LeaderNode(
   private def onResponse(peer: Peer, response: Either[Throwable, AppendEntriesResponse]): IO[Unit] =
     response match {
       case Left(e) =>
-        logger.debug(s"$prefix no response from peer ${peer.host}:${peer.port}, error: ${e.getMessage}")
+        logger.trace(s"$prefix no response from peer ${peer.host}:${peer.port}, error: ${e.getMessage}")
       case Right(r) =>
         for {
           header       <- r.header.required
@@ -112,18 +113,18 @@ class LeaderNode(
 
   override def join(request: JoinRequest): IO[JoinResponse.Status] =
     for {
-      peerHeader   <- request.header.required
-      peer         <- peerHeader.peer.required
-      _            <- logger.debug(s"$prefix peer ${peer.host}:${peer.port} joining")
-      currentState <- state.get
+      peerHeader <- request.header.required
+      peer       <- peerHeader.peer.required
+      _          <- logger.debug(s"$prefix peer ${peer.host}:${peer.port} joining")
+      _ <- state.flatModify { currentState =>
+        if !currentState.peers.contains(peer) then {
+          val newState = currentState.copy(peers = currentState.peers + peer)
+          (newState, restartHeartbeatStream)
+        } else (currentState, IO.unit)
+      }
       status = JoinResponse.Status.Accepted(
         JoinResponse.Accepted()
       )
-      _ <-
-        if !currentState.peers.contains(peer) then {
-          val newState = currentState.copy(peers = currentState.peers + peer)
-          peersChanged(newState)
-        } else IO.unit
     } yield status
 
   override def vote(request: VoteRequest): IO[Boolean] =
@@ -153,14 +154,16 @@ object LeaderNode {
     signal: Interrupt,
     supervisor: Supervisor[IO],
     trace: NodeTrace,
-  ): IO[LeaderNode] = IO.pure {
-    new LeaderNode(
+  ): IO[LeaderNode] = for {
+    streamSignal <- SignallingRef.of[IO, Boolean](false)
+    node = new LeaderNode(
       context,
       state,
       events,
       signal,
+      streamSignal,
       supervisor,
       trace,
     )
-  }
+  } yield node
 }

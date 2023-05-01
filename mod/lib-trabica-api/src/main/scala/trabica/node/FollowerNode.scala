@@ -25,33 +25,36 @@ class FollowerNode(
 
   private final val prefix: String = s"[follower-$id]"
 
-  private final val heartbeatStreamTimeout: Long =
-    context.config.getLong("trabica.follower.heartbeat-stream.timeout")
+  private final val heartbeatStreamTimeoutMin: Long =
+    context.config.getLong("trabica.follower.heartbeat-stream.timeout.min")
+
+  private final val heartbeatStreamTimeoutMax: Long =
+    context.config.getLong("trabica.follower.heartbeat-stream.timeout.max")
+
+  override def stateIO: IO[NodeState] = state.get
+
+  def run: IO[FiberIO[Unit]] =
+    Stream
+      .eval(Random.scalaUtilRandom[IO])
+      .evalMap(_.betweenLong(heartbeatStreamTimeoutMin, heartbeatStreamTimeoutMax))
+      .flatMap(heartbeatStream)
+      .compile
+      .drain
+      .supervise(supervisor)
 
   override def interrupt: IO[Unit] =
     signal.complete(Right(())).void >>
       logger.debug(s"$prefix interrupted")
 
-  override def stateIO: IO[NodeState] = state.get
-
-  private def peersChanged(newState: NodeState.Follower): IO[Unit] =
-    for {
-      _            <- logger.debug(s"$prefix peers changed, restarting follower")
-      currentState <- state.get
-      _ <- events.offer(
-        Event.NodeStateChanged(currentState, newState, StateTransitionReason.ConfigurationChanged)
-      )
-    } yield ()
-
-  private def heartbeatStream: IO[Unit] =
+  private def heartbeatStream(rate: Long) =
     Stream
-      .fixedRate[IO](heartbeatStreamTimeout.milliseconds)
+      .fixedRate[IO](rate.milliseconds)
       .interruptWhen(signal)
-      .evalTap(_ => logger.debug(s"$prefix heartbeat wake up"))
+      .evalTap(_ => logger.trace(s"$prefix heartbeat wake up"))
       .evalMap { _ =>
         heartbeat.flatModify[Unit] {
           case Some(_) =>
-            (None, logger.debug(s"$prefix heartbeat good to go"))
+            (None, logger.trace(s"$prefix heartbeat good to go"))
           case None =>
             (
               None,
@@ -74,8 +77,6 @@ class FollowerNode(
       .onFinalize {
         logger.debug(s"$prefix heartbeat stream finalized")
       }
-      .compile
-      .drain
 
   private def timeout: IO[Unit] =
     for {
@@ -95,19 +96,17 @@ class FollowerNode(
       - <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.NoHeartbeat))
     } yield ()
 
-  def run: IO[FiberIO[Unit]] =
-    heartbeatStream.supervise(supervisor)
-
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     for {
       _            <- heartbeat.set(Some(()))
       currentState <- state.get
       header       <- request.header.required
       peer         <- header.peer.required
-      _            <- logger.debug(s"$prefix updating peers, ${request.peers.length} peer(s) known to leader")
-      _ <- state.set(
-        currentState.copy(peers = request.peers.toSet + peer - currentState.self)
-      ) // copy the current peers from leader including the leader and excluding self
+      _ <-
+        if !currentState.peers.contains(peer) then
+          logger.debug(s"$prefix updating peers, ${request.peers.length} peer(s) known to leader") >>
+            state.set(currentState.copy(peers = request.peers.toSet + peer - currentState.self))
+        else IO.unit
       _ <- Node.termCheck(header, currentState, events)
     } yield false
 
@@ -120,26 +119,22 @@ class FollowerNode(
       status = JoinResponse.Status.Forward(
         JoinResponse.Forward(leader = currentState.leader.some)
       )
-      _ <-
-        if !currentState.peers.contains(peer) then {
-          val newState = currentState.copy(peers = currentState.peers + peer)
-          peersChanged(newState)
-        } else IO.unit
     } yield status
 
   override def vote(request: VoteRequest): IO[Boolean] =
-    for {
-      currentState <- state.get
-      header       <- request.header.required
-      voteGranted = currentState.votedFor.isEmpty && Term.of(header.term) > currentState.currentTerm
-      _ <-
-        if voteGranted then {
-          for {
-            peer <- header.peer.required
-            _    <- state.set(currentState.copy(votedFor = peer.some))
-          } yield ()
-        } else IO.unit
-    } yield voteGranted
+    state.flatModify { currentState =>
+      request.header match {
+        case Some(header) =>
+          header.peer match {
+            case Some(peer) if currentState.votedFor.isEmpty && Term.of(header.term) > currentState.currentTerm =>
+              (currentState.copy(votedFor = peer.some), IO.pure(true))
+            case _ =>
+              (currentState, IO.pure(false))
+          }
+        case None =>
+          (currentState, IO.pure(false))
+      }
+    }
 
 }
 

@@ -25,7 +25,7 @@ class Trabica(
   private def transition(oldState: NodeState, newState: NodeState, reason: StateTransitionReason): IO[FiberIO[Unit]] =
     for {
       _      <- logger.debug(s"transitioning [from: ${oldState.tag}, to: ${newState.tag}, reason: $reason]")
-      signal <- Deferred[IO, Either[Throwable, Unit]]
+      signal <- Interrupt.instance
       f <- newState match {
         case state: NodeState.Orphan =>
           orphan(state, signal).supervise(supervisor)

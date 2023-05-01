@@ -5,6 +5,10 @@ import trabica.model.NodeError
 
 type Interrupt = Deferred[IO, Either[Throwable, Unit]]
 
+object Interrupt {
+  def instance: IO[Interrupt] = Deferred[IO, Either[Throwable, Unit]]
+}
+
 extension [A](self: Option[A]) {
   def required: IO[A] = self match {
     case Some(value) =>

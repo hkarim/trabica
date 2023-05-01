@@ -115,6 +115,8 @@ lazy val `node-template` = project
   .dependsOn(`lib-trabica-api`)
   .settings(List(Compile / mainClass := Some("trabica.node.Service")))
 
+addCommandAlias("native", "GraalVMNativeImage/packageBin")
+
 
 
 
