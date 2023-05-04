@@ -6,7 +6,7 @@ import cats.syntax.all.*
 import com.typesafe.config.ConfigFactory
 import fs2.*
 import trabica.model.*
-import trabica.net.{Grpc, NodeApi}
+import trabica.net.{Networking, NodeApi}
 import trabica.store.FsmStore
 
 class Trabica(
@@ -160,9 +160,8 @@ object Trabica {
       .replace()
   }.void
 
-  def run(command: CliCommand): IO[Unit] =
+  def run(command: CliCommand, store: FsmStore, networking: Networking): IO[Unit] =
     Supervisor[IO](await = false).use { supervisor =>
-      FsmStore.resource(command.dataDirectory).use { store =>
         for {
           config    <- IO.blocking(ConfigFactory.load())
           _         <- logging(scribe.Level(config.getString("trabica.log.level")))
@@ -172,7 +171,7 @@ object Trabica {
             peer = Peer(command.host, command.port),
             messageId = messageId,
             store = store,
-            networking = Grpc,
+            networking = networking,
           )
           state  <- Node.state(command)
           events <- Queue.unbounded[IO, Event]
@@ -182,10 +181,9 @@ object Trabica {
           trabica = new Trabica(context, ref, events, supervisor, trace)
           _ <- node.run.supervise(supervisor)
           _ <- trabica.run.supervise(supervisor)
-          _ <- Grpc.server(trabica, command).useForever
+          _ <- networking.server(trabica, command).useForever
         } yield ()
       }
 
-    }
 
 }

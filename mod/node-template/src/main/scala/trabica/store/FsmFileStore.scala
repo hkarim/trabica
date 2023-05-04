@@ -1,8 +1,8 @@
 package trabica.store
 
-import cats.effect.*
-import com.google.protobuf.{ByteString, CodedInputStream, CodedOutputStream}
-import fs2.*
+import cats.effect.{IO, Resource}
+import com.google.protobuf.{CodedInputStream, CodedOutputStream}
+import fs2.Stream
 import trabica.model.{Index, LogEntry, LogEntryTag}
 
 import java.nio.ByteBuffer
@@ -10,16 +10,8 @@ import java.nio.channels.FileChannel
 import java.nio.file.{Files, Path, StandardOpenOption}
 import java.util
 
-trait FsmStore {
-  def configuration: IO[Option[LogEntry]]
-  def stream: Stream[IO, LogEntry]
-  def streamFrom(index: Index): Stream[IO, LogEntry]
-  def atIndex(index: Index): IO[LogEntry]
-  def append(entry: LogEntry): IO[Unit]
-  def truncate(keepIndex: Index): IO[Unit]
-}
-
-object FsmStore {
+// very simple and quick FmsStore implementation, similar to an SS-Table
+object FsmFileStore {
 
   private class IndexFileStore(writeChannel: FileChannel, readChannel: FileChannel) {
 
@@ -175,34 +167,6 @@ object FsmStore {
       logStore = new FsmFileStore(logWrite, logRead, indexStore)
     } yield logStore
   }
-
 }
 
-object Delme extends IOApp.Simple {
-  override val run: IO[Unit] =
-    FsmStore.resource("var/00").use { store =>
-      import cats.syntax.all.*
-      (1 to 1000)
-        .toList
-        .traverse { i =>
-          val s =
-            if i % 2 == 0 then
-              ByteString.copyFromUtf8("the long and winding road")
-            else
-              ByteString.copyFromUtf8("that leads to your door")
-          store.append(LogEntry(index = i, term = 1, tag = LogEntryTag.Data, data = s))
-        }
-        .flatMap { _ =>
-          store.truncate(keepIndex = Index.of(100L))
-        }
-        .flatMap { _ =>
-          val print = store.streamFrom(Index.of(90L)).evalTap(IO.println).compile.drain
-          for {
-            f1 <- print.start
-            f2 <- print.start
-            _  <- f1.join
-            _  <- f2.join
-          } yield ()
-        }
-    }
-}
+

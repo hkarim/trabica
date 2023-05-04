@@ -31,6 +31,7 @@ lazy val trabica = project
   .aggregate(`lib-trabica-model`)
   .aggregate(`lib-trabica-net`)
   .aggregate(`lib-trabica-rpc`)
+  .aggregate(`lib-trabica-store`)
   .aggregate(`lib-trabica-api`)
   .aggregate(`node-template`)
 
@@ -93,6 +94,23 @@ lazy val `lib-trabica-rpc` = project
   .dependsOn(`lib-trabica-model`)
   .dependsOn(`lib-trabica-net`)
 
+lazy val `lib-trabica-store` = project
+  .in(file("mod/lib-trabica-store"))
+  .settings(commonSettings)
+  .settings(scalacOptions ++= fullScalaOptions)
+  .settings(
+    name := "lib-trabica-store",
+  )
+  .settings(
+    libraryDependencies ++=
+      Lib.config ++
+        Lib.catsEffect ++
+        Lib.fs2 ++
+        Lib.decline ++
+        Lib.scribe
+  )
+  .dependsOn(`lib-trabica-model`)
+
 lazy val `lib-trabica-api` = project
   .in(file("mod/lib-trabica-api"))
   .settings(commonSettings)
@@ -110,7 +128,7 @@ lazy val `lib-trabica-api` = project
   )
   .dependsOn(`lib-trabica-model`)
   .dependsOn(`lib-trabica-net`)
-  .dependsOn(`lib-trabica-rpc`)
+  .dependsOn(`lib-trabica-store`)
 
 lazy val `node-template` = project
   .in(file("mod/node-template"))
@@ -163,6 +181,7 @@ lazy val `node-template` = project
     libraryDependencies ++= Lib.decline,
   )
   .dependsOn(`lib-trabica-api`)
+  .dependsOn(`lib-trabica-rpc`)
   .settings(List(Compile / mainClass := Some("trabica.node.Service")))
 
 addCommandAlias("native", "GraalVMNativeImage/packageBin")
