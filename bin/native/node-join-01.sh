@@ -4,4 +4,4 @@ join \
 --host 0.0.0.0 \
 --port 6001 \
 --peer-address 0.0.0.0:5555 \
---data var/00
+--data var/01
