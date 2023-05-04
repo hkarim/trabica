@@ -9,6 +9,7 @@ object Index {
   final val one: Index = 1L
 
   extension (self: Index) {
+    def value: Long = self
     def increment: Index = self + 1
   }
 }

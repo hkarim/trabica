@@ -2,4 +2,5 @@
 mod/node-template/target/universal/stage/bin/node-template -- \
 bootstrap \
 --host 0.0.0.0 \
---port 5555
+--port 5555 \
+--data var/00

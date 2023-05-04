@@ -7,27 +7,30 @@ import com.monovore.decline.*
 sealed trait CliCommand {
   def host: String
   def port: Int
+  def dataDirectory: String
 }
 
 object CliCommand {
 
-  case class Bootstrap(host: String, port: Int) extends CliCommand
+  case class Bootstrap(host: String, port: Int, dataDirectory: String) extends CliCommand
 
   private final def bootstrapOpts: Opts[Bootstrap] =
     Opts.subcommand("bootstrap", "start a new trabica cluster with this initial bootstrap node") {
       val hostOpt = Opts.option[String]("host", "node host")
       val portOpt = Opts.option[Int]("port", "node port")
-      (hostOpt, portOpt).mapN {
-        case (host, port) => Bootstrap(host, port)
+      val dirOpt = Opts.option[String]("data", "data directory")
+      (hostOpt, portOpt, dirOpt).mapN {
+        case (host, port, dir) => Bootstrap(host, port, dir)
       }
     }
 
-  case class Join(host: String, port: Int, peerHost: String, peerPort: Int) extends CliCommand
+  case class Join(host: String, port: Int, peerHost: String, peerPort: Int, dataDirectory: String) extends CliCommand
 
   private final def joinOpts: Opts[Join] =
     Opts.subcommand("join", "join a trabica cluster") {
       val hostOpt = Opts.option[String]("host", "node host")
       val portOpt = Opts.option[Int]("port", "node port")
+      val dirOpt = Opts.option[String]("data", "data directory")
 
       val peerAddressOpt: Opts[(String, Int)] =
         Opts
@@ -45,8 +48,8 @@ object CliCommand {
             }
           }
 
-      (hostOpt, portOpt, peerAddressOpt).mapN {
-        case (host, port, (peerHost, peerPort)) => Join(host, port, peerHost, peerPort)
+      (hostOpt, portOpt, peerAddressOpt, dirOpt).mapN {
+        case (host, port, (peerHost, peerPort), dir) => Join(host, port, peerHost, peerPort, dir)
       }
     }
 
