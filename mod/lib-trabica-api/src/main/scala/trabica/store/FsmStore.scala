@@ -3,7 +3,6 @@ package trabica.store
 import cats.effect.*
 import com.google.protobuf.{ByteString, CodedInputStream, CodedOutputStream}
 import fs2.*
-import scodec.*
 import trabica.model.{Index, LogEntry, LogEntryTag, NodeError}
 
 import java.nio.ByteBuffer
@@ -25,7 +24,10 @@ object FsmStore {
 
     def logEntryAppended(at: Long): IO[Unit] =
       IO.blocking {
-        val buffer = codecs.int64.encode(at).require.toByteBuffer
+        val buffer = ByteBuffer.allocate(8)
+        buffer.mark()
+        buffer.putLong(at)
+        buffer.reset()
         writeChannel.write(buffer)
       }.void
 
@@ -47,6 +49,8 @@ object FsmStore {
         val size: Long = if keepIndex == Index.zero then 0 else keepIndex.value * 8
         writeChannel.truncate(size)
       }.void
+
+    def size: IO[Long] = IO.blocking(writeChannel.size())
   }
 
   private class FsmFileStore(
@@ -57,7 +61,15 @@ object FsmStore {
 
     override def configuration: IO[Option[LogEntry]] = ???
 
-    override def stream: Stream[IO, LogEntry] = ???
+    override def stream: Stream[IO, LogEntry] =
+      Stream
+        .eval(indexStore.size)
+        .map(_ / 8)
+        .flatMap { n =>
+          Stream
+            .range(1L, n + 1L)
+            .evalMap(i => at(Index.from(i)))
+        }
 
     override def at(index: Index): IO[LogEntry] =
       indexStore.positionOf(index).flatMap { position =>
@@ -156,11 +168,16 @@ object Delme extends IOApp.Simple {
           store.append(LogEntry(index = i, term = 1, tag = LogEntryTag.Data, data = s))
         }
         .flatMap { _ =>
-          store.truncate(Index.one.increment.increment)
+          store.truncate(Index.from(100L))
         }
         .flatMap { _ =>
-          store.at(Index.one.increment)
+          val print = store.stream.evalTap(IO.println).compile.drain
+            for {
+              f1 <- print.start
+              f2 <- print.start
+              _ <- f1.join
+              _ <- f2.join
+            } yield ()
         }
-        .flatMap(IO.println)
     }
 }
