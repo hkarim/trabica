@@ -1,9 +1,9 @@
 package trabica.net
 
 import cats.effect.{IO, Resource}
+import fs2.grpc.syntax.all.*
 import io.grpc.Metadata
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder
-import fs2.grpc.syntax.all.*
 import trabica.model.*
 import trabica.rpc.*
 

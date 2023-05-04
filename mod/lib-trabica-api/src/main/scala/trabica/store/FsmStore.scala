@@ -3,7 +3,7 @@ package trabica.store
 import cats.effect.*
 import com.google.protobuf.{ByteString, CodedInputStream, CodedOutputStream}
 import fs2.*
-import trabica.model.{Index, LogEntry, LogEntryTag, NodeError}
+import trabica.model.{Index, LogEntry, LogEntryTag}
 
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -13,36 +13,38 @@ import java.util
 trait FsmStore {
   def configuration: IO[Option[LogEntry]]
   def stream: Stream[IO, LogEntry]
-  def at(index: Index): IO[LogEntry]
+  def streamFrom(index: Index): Stream[IO, LogEntry]
+  def atIndex(index: Index): IO[LogEntry]
   def append(entry: LogEntry): IO[Unit]
-  def truncate(keep: Index): IO[Unit]
+  def truncate(keepIndex: Index): IO[Unit]
 }
 
 object FsmStore {
 
   private class IndexFileStore(writeChannel: FileChannel, readChannel: FileChannel) {
 
-    def logEntryAppended(at: Long): IO[Unit] =
+    def size: IO[Long] =
+      IO.blocking(readChannel.size())
+
+    def logEntryAppended(position: Long): IO[Unit] =
       IO.blocking {
         val buffer = ByteBuffer.allocate(8)
         buffer.mark()
-        buffer.putLong(at)
+        buffer.putLong(position)
         buffer.reset()
         writeChannel.write(buffer)
       }.void
 
     def positionOf(index: Index): IO[Long] =
-      if index == Index.zero then
-        IO.raiseError(NodeError.ValueError(s"position of index 0 requested"))
-      else
-        IO
-          .blocking {
-            val p: Long = (index.value - 1) * 8
-            val buffer  = ByteBuffer.allocate(8)
-            buffer.mark()
-            readChannel.read(buffer, p)
-            buffer.reset().getLong
-          }
+      read((index.value - 1) * 8)
+
+    def read(position: Long): IO[Long] =
+      IO.blocking {
+        val buffer = ByteBuffer.allocate(8)
+        buffer.mark()
+        readChannel.read(buffer, position)
+        buffer.reset().getLong
+      }
 
     def truncate(keepIndex: Index): IO[Unit] =
       IO.blocking {
@@ -50,7 +52,18 @@ object FsmStore {
         writeChannel.truncate(size)
       }.void
 
-    def size: IO[Long] = IO.blocking(writeChannel.size())
+    def stream: Stream[IO, Long] =
+      streamFrom(0L)
+
+    def streamFrom(position: Long): Stream[IO, Long] =
+      Stream
+        .eval(size)
+        .flatMap { n =>
+          Stream
+            .range(position, n, 8L)
+            .evalMap(read)
+        }
+
   }
 
   private class FsmFileStore(
@@ -59,55 +72,67 @@ object FsmStore {
     indexStore: IndexFileStore
   ) extends FsmStore {
 
-    override def configuration: IO[Option[LogEntry]] = ???
+    override def configuration: IO[Option[LogEntry]] =
+      stream
+        .filter(_.tag == LogEntryTag.Conf)
+        .compile
+        .last
 
     override def stream: Stream[IO, LogEntry] =
-      Stream
-        .eval(indexStore.size)
-        .map(_ / 8)
-        .flatMap { n =>
-          Stream
-            .range(1L, n + 1L)
-            .evalMap(i => at(Index.from(i)))
-        }
+      streamFrom(Index.one)
 
-    override def at(index: Index): IO[LogEntry] =
-      indexStore.positionOf(index).flatMap { position =>
-        IO.blocking {
-          // allocate a buffer to read the entry length
-          val lengthBuffer = ByteBuffer.allocate(4) // 32-bits
-          lengthBuffer.mark()
-          // read the length from the channel at the index position
-          readChannel.read(lengthBuffer, position)
-          lengthBuffer.reset()
-          val length = lengthBuffer.getInt
-          // allocate a buffer of capacity `length`
-          val entryBuffer = ByteBuffer.allocate(length)
-          entryBuffer.mark()
-          // read the entry from the channel
-          readChannel.read(entryBuffer, position + 4)
-          entryBuffer.reset()
-          LogEntry.parseFrom(CodedInputStream.newInstance(entryBuffer))
-        }
+    override def streamFrom(index: Index): Stream[IO, LogEntry] =
+      indexStore
+        .streamFrom((index.value - 1) * 8)
+        .evalMap(atPosition)
+
+    override def atIndex(index: Index): IO[LogEntry] =
+      indexStore
+        .positionOf(index)
+        .flatMap(atPosition)
+
+    private def atPosition(position: Long): IO[LogEntry] =
+      IO.blocking {
+        // allocate a buffer to read the entry length
+        val lengthBuffer = ByteBuffer.allocate(4) // 32-bits
+        lengthBuffer.mark()
+        // read the length from the channel at the index position
+        readChannel.read(lengthBuffer, position)
+        lengthBuffer.reset()
+        val length = lengthBuffer.getInt
+        // allocate a buffer of capacity `length`
+        val entryBuffer = ByteBuffer.allocate(length)
+        entryBuffer.mark()
+        // read the entry from the channel
+        readChannel.read(entryBuffer, position + 4)
+        entryBuffer.reset()
+        LogEntry.parseFrom(CodedInputStream.newInstance(entryBuffer))
       }
 
-    override def append(entry: LogEntry): IO[Unit] = IO.blocking {
-      // compute the serialized entry length
-      val length = entry.serializedSize
-      val size   = 4 + length
-      // allocate a buffer to hold [length,data]
-      val buffer = ByteBuffer.allocate(size)
-      buffer.mark()
-      // write the length into the buffer
-      buffer.putInt(length)
-      // write the entry into the buffer
-      entry.writeTo(CodedOutputStream.newInstance(buffer))
+    override def append(entry: LogEntry): IO[Unit] =
+      IO
+        .blocking {
+          // compute the serialized entry length
+          val length = entry.serializedSize
+          val size   = 4 + length
+          // allocate a buffer to hold [length,data]
+          val buffer = ByteBuffer.allocate(size)
+          buffer.mark()
+          // write the length into the buffer
+          buffer.putInt(length)
+          // write the entry into the buffer
+          entry.writeTo(CodedOutputStream.newInstance(buffer))
 
-      // write the buffer into the channel
-      buffer.reset()
-      writeChannel.write(buffer)
-      writeChannel.position - size
-    }.flatMap(indexStore.logEntryAppended)
+          // write the buffer into the channel
+          buffer.reset()
+          writeChannel.write(buffer)
+          // get the position of this entry
+          writeChannel.position - size
+        }
+        .flatMap { p =>
+          // index the position of thi entry
+          indexStore.logEntryAppended(p)
+        }
 
     override def truncate(keepIndex: Index): IO[Unit] =
       indexStore.positionOf(keepIndex.increment).flatMap { position =>
@@ -168,16 +193,16 @@ object Delme extends IOApp.Simple {
           store.append(LogEntry(index = i, term = 1, tag = LogEntryTag.Data, data = s))
         }
         .flatMap { _ =>
-          store.truncate(Index.from(100L))
+          store.truncate(keepIndex = Index.of(100L))
         }
         .flatMap { _ =>
-          val print = store.stream.evalTap(IO.println).compile.drain
-            for {
-              f1 <- print.start
-              f2 <- print.start
-              _ <- f1.join
-              _ <- f2.join
-            } yield ()
+          val print = store.streamFrom(Index.of(90L)).evalTap(IO.println).compile.drain
+          for {
+            f1 <- print.start
+            f2 <- print.start
+            _  <- f1.join
+            _  <- f2.join
+          } yield ()
         }
     }
 }

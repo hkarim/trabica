@@ -1,4 +1,3 @@
-
 lazy val commonScalaOptions = List(
   "-deprecation",
   "-encoding",
@@ -16,9 +15,9 @@ lazy val fullScalaOptions =
   )
 
 lazy val commonSettings = List(
-  organization := s"io.hk",
-  scalaVersion := Lib.Version.scala,
-  version := Lib.Version.service,
+  organization                    := s"io.hk",
+  scalaVersion                    := Lib.Version.scala,
+  version                         := Lib.Version.service,
   Compile / packageDoc / mappings := Seq.empty,
 )
 
@@ -28,9 +27,55 @@ lazy val trabica = project
   .settings(
     name := "trabica",
   )
+  .aggregate(`lib-trabica-proto`)
+  .aggregate(`lib-trabica-model`)
+  .aggregate(`lib-trabica-net`)
   .aggregate(`lib-trabica-rpc`)
   .aggregate(`lib-trabica-api`)
   .aggregate(`node-template`)
+
+lazy val `lib-trabica-proto` = project
+  .in(file("mod/lib-trabica-proto"))
+  .enablePlugins(Fs2Grpc)
+  .settings(commonSettings)
+  .settings(scalacOptions ++= commonScalaOptions)
+  .settings(PB.protocVersion := Lib.Version.protocVersion)
+  .settings(
+    name := "lib-trabica-proto",
+  )
+
+lazy val `lib-trabica-model` = project
+  .in(file("mod/lib-trabica-model"))
+  .settings(commonSettings)
+  .settings(scalacOptions ++= fullScalaOptions)
+  .settings(
+    name := "lib-trabica-model",
+  )
+  .settings(
+    libraryDependencies ++=
+      Lib.config ++
+        Lib.catsEffect ++
+        Lib.fs2 ++
+        Lib.decline ++
+        Lib.scribe
+  )
+  .dependsOn(`lib-trabica-proto`)
+
+lazy val `lib-trabica-net` = project
+  .in(file("mod/lib-trabica-net"))
+  .settings(commonSettings)
+  .settings(scalacOptions ++= fullScalaOptions)
+  .settings(
+    name := "lib-trabica-net",
+  )
+  .settings(
+    libraryDependencies ++=
+      Lib.config ++
+        Lib.catsEffect ++
+        Lib.fs2 ++
+        Lib.scribe
+  )
+  .dependsOn(`lib-trabica-model`)
 
 lazy val `lib-trabica-rpc` = project
   .in(file("mod/lib-trabica-rpc"))
@@ -44,6 +89,9 @@ lazy val `lib-trabica-rpc` = project
   .settings(
     libraryDependencies ++= Lib.grpc
   )
+  .dependsOn(`lib-trabica-proto` % "protobuf")
+  .dependsOn(`lib-trabica-model`)
+  .dependsOn(`lib-trabica-net`)
 
 lazy val `lib-trabica-api` = project
   .in(file("mod/lib-trabica-api"))
@@ -60,6 +108,8 @@ lazy val `lib-trabica-api` = project
         Lib.decline ++
         Lib.scribe
   )
+  .dependsOn(`lib-trabica-model`)
+  .dependsOn(`lib-trabica-net`)
   .dependsOn(`lib-trabica-rpc`)
 
 lazy val `node-template` = project
@@ -101,7 +151,7 @@ lazy val `node-template` = project
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSslPrivateKeyMethod",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.ReferenceCountedOpenSslEngine",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.OpenSslAsyncPrivateKeyMethod",
-      //"--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.BouncyCastleAlpnSslUtils",
+      // "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.handler.ssl.BouncyCastleAlpnSslUtils",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.AsyncSSLPrivateKeyMethod",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.CertificateVerifier",
       "--initialize-at-run-time=io.grpc.netty.shaded.io.netty.internal.tcnative.SSL",
@@ -116,7 +166,3 @@ lazy val `node-template` = project
   .settings(List(Compile / mainClass := Some("trabica.node.Service")))
 
 addCommandAlias("native", "GraalVMNativeImage/packageBin")
-
-
-
-

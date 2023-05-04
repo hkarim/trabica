@@ -6,6 +6,8 @@ import cats.syntax.all.*
 import com.typesafe.config.ConfigFactory
 import fs2.*
 import trabica.model.*
+import trabica.net.{Grpc, NodeApi}
+import trabica.store.FsmStore
 
 class Trabica(
   val context: NodeContext,
@@ -160,25 +162,30 @@ object Trabica {
 
   def run(command: CliCommand): IO[Unit] =
     Supervisor[IO](await = false).use { supervisor =>
-      for {
-        config    <- IO.blocking(ConfigFactory.load())
-        _         <- logging(scribe.Level(config.getString("trabica.log.level")))
-        messageId <- Ref.of[IO, MessageId](MessageId.zero)
-        context = NodeContext(
-          config = config,
-          peer = Peer(command.host, command.port),
-          messageId = messageId,
-        )
-        state  <- Node.state(command)
-        events <- Queue.unbounded[IO, Event]
-        trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
-        node   <- Node.instance(context, events, supervisor, trace, state)
-        ref    <- Ref.of[IO, Node](node)
-        trabica = new Trabica(context, ref, events, supervisor, trace)
-        _ <- node.run.supervise(supervisor)
-        _ <- trabica.run.supervise(supervisor)
-        _ <- NodeApi.server(trabica, command).useForever
-      } yield ()
+      FsmStore.resource(command.dataDirectory).use { store =>
+        for {
+          config    <- IO.blocking(ConfigFactory.load())
+          _         <- logging(scribe.Level(config.getString("trabica.log.level")))
+          messageId <- Ref.of[IO, MessageId](MessageId.zero)
+          context = NodeContext(
+            config = config,
+            peer = Peer(command.host, command.port),
+            messageId = messageId,
+            store = store,
+            networking = Grpc,
+          )
+          state  <- Node.state(command)
+          events <- Queue.unbounded[IO, Event]
+          trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
+          node   <- Node.instance(context, events, supervisor, trace, state)
+          ref    <- Ref.of[IO, Node](node)
+          trabica = new Trabica(context, ref, events, supervisor, trace)
+          _ <- node.run.supervise(supervisor)
+          _ <- trabica.run.supervise(supervisor)
+          _ <- Grpc.server(trabica, command).useForever
+        } yield ()
+      }
+
     }
 
 }

@@ -5,6 +5,7 @@ import cats.effect.std.*
 import cats.syntax.all.*
 import fs2.*
 import trabica.model.*
+import trabica.net.NodeApi
 
 import scala.concurrent.duration.*
 
@@ -33,7 +34,7 @@ class OrphanNode(
     for {
       s <- Resource.eval(state.get)
       clients <- s.peers.toVector.traverse { peer =>
-        NodeApi.client(prefix, peer)
+        context.networking.client(prefix, peer)
       }
     } yield clients
 

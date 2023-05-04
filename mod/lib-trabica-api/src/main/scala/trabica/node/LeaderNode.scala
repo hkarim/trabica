@@ -6,6 +6,7 @@ import cats.syntax.all.*
 import fs2.*
 import fs2.concurrent.SignallingRef
 import trabica.model.*
+import trabica.net.NodeApi
 
 import scala.concurrent.duration.*
 
@@ -39,7 +40,7 @@ class LeaderNode(
     for {
       currentState <- Resource.eval(state.get)
       clients <- currentState.peers.toVector.traverse { peer =>
-        NodeApi.client(prefix, peer)
+        context.networking.client(prefix, peer)
       }
     } yield clients
 

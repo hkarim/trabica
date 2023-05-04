@@ -4,14 +4,13 @@ import cats.effect.*
 import fs2.grpc.syntax.all.*
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder
 import io.grpc.{Metadata, Server}
-import trabica.model.CliCommand
 import trabica.rpc.TrabicaFs2Grpc
 
 object GrpcServer {
 
   private final val logger = scribe.cats[IO]
 
-  def resource(handler: TrabicaFs2Grpc[IO, Metadata], command: CliCommand): Resource[IO, Server] = {
+  def resource(handler: TrabicaFs2Grpc[IO, Metadata], port: Int): Resource[IO, Server] = {
     def acquire(server: Server): IO[Server] =
       IO.delay(server.start())
 
@@ -22,11 +21,11 @@ object GrpcServer {
     TrabicaFs2Grpc
       .bindServiceResource[IO](handler).flatMap { ssd =>
         NettyServerBuilder
-          .forPort(command.port)
+          .forPort(port)
           .addService(ssd)
           .resource[IO]
           .evalTap { _ =>
-            logger.debug(s"grpc server starting on port ${command.port}")
+            logger.debug(s"grpc server starting on port ${port}")
           }
           .flatMap { server =>
             Resource.make(acquire(server))(release)

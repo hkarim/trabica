@@ -8,7 +8,7 @@ object Index {
 
   final val one: Index = 1L
   
-  def from(value: Long): Index = value
+  def of(value: Long): Index = value
 
   extension (self: Index) {
     def value: Long = self

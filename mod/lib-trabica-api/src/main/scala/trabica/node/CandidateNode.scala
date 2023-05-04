@@ -6,6 +6,7 @@ import cats.syntax.all.*
 import fs2.*
 import fs2.concurrent.SignallingRef
 import trabica.model.*
+import trabica.net.*
 
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration.*
@@ -49,7 +50,7 @@ class CandidateNode(
     for {
       s <- Resource.eval(state.get)
       clients <- s.peers.toVector.traverse { peer =>
-        NodeApi.client(prefix, peer)
+        context.networking.client(prefix, peer)
       }
     } yield clients
 

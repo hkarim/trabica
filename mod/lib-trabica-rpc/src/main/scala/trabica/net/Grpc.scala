@@ -1,24 +1,11 @@
-package trabica.node
-
+package trabica.net
 import cats.effect.{IO, Resource}
 import io.grpc.Metadata
 import trabica.model.*
-import trabica.net.{GrpcClient, GrpcServer}
-import trabica.rpc.*
+import trabica.rpc.TrabicaFs2Grpc
 
-trait NodeApi {
+object Grpc extends Networking {
 
-  def peer: Peer
-
-  def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse]
-
-  def vote(request: VoteRequest): IO[VoteResponse]
-
-  def join(request: JoinRequest): IO[JoinResponse]
-
-}
-
-object NodeApi {
 
   private class GrpcClientNodeApi(val peer: Peer, client: TrabicaFs2Grpc[IO, Metadata]) extends NodeApi {
 
@@ -52,7 +39,6 @@ object NodeApi {
 
   def server(api: NodeApi, command: CliCommand): Resource[IO, NodeApi] =
     GrpcServer
-      .resource(new GrpcServerNodeApi(api), command)
+      .resource(new GrpcServerNodeApi(api), command.port)
       .map(_ => api)
-
 }
