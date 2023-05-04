@@ -32,7 +32,7 @@ lazy val trabica = project
   .aggregate(`lib-trabica-net`)
   .aggregate(`lib-trabica-rpc`)
   .aggregate(`lib-trabica-store`)
-  .aggregate(`lib-trabica-api`)
+  .aggregate(`lib-trabica-node`)
   .aggregate(`node-template`)
 
 lazy val `lib-trabica-proto` = project
@@ -111,12 +111,12 @@ lazy val `lib-trabica-store` = project
   )
   .dependsOn(`lib-trabica-model`)
 
-lazy val `lib-trabica-api` = project
-  .in(file("mod/lib-trabica-api"))
+lazy val `lib-trabica-node` = project
+  .in(file("mod/lib-trabica-node"))
   .settings(commonSettings)
   .settings(scalacOptions ++= fullScalaOptions)
   .settings(
-    name := "lib-trabica-api",
+    name := "lib-trabica-node",
   )
   .settings(
     libraryDependencies ++=
@@ -180,7 +180,7 @@ lazy val `node-template` = project
   .settings(
     libraryDependencies ++= Lib.decline,
   )
-  .dependsOn(`lib-trabica-api`)
+  .dependsOn(`lib-trabica-node`)
   .dependsOn(`lib-trabica-rpc`)
   .settings(List(Compile / mainClass := Some("trabica.node.Service")))
 
