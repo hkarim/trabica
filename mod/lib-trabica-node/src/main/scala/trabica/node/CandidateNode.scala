@@ -5,6 +5,7 @@ import cats.effect.std.*
 import cats.syntax.all.*
 import fs2.*
 import fs2.concurrent.SignallingRef
+import scribe.Scribe
 import trabica.model.*
 import trabica.net.*
 
@@ -21,9 +22,9 @@ class CandidateNode(
   val streamSignal: SignallingRef[IO, Boolean],
   val supervisor: Supervisor[IO],
   val trace: NodeTrace,
-) extends Node {
+) extends Node[NodeState.Candidate] {
 
-  private final val logger = scribe.cats[IO]
+  override final val logger: Scribe[IO] = scribe.cats[IO]
 
   private final val id: Int = trace.candidateId
 
@@ -41,12 +42,13 @@ class CandidateNode(
   private final val voteRequestTimeout: Long =
     context.config.getLong("trabica.candidate.vote-request.timeout")
 
+  def lens: NodeStateLens[NodeState.Candidate] =
+    NodeStateLens[NodeState.Candidate]
+
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >>
       signal.complete(Right(())).void >>
       logger.debug(s"$prefix interrupted")
-
-  override def stateIO: IO[NodeState] = state.get
 
   private def timeout: IO[Unit] =
     for {

@@ -2,7 +2,7 @@ package trabica.node
 
 import cats.effect.*
 import com.google.protobuf.CodedInputStream
-import trabica.model.{LogEntry, LogEntryTag, NodeError, Quorum}
+import trabica.model.*
 
 type Interrupt = Deferred[IO, Either[Throwable, Unit]]
 
@@ -28,6 +28,11 @@ extension [A](self: Option[A]) {
     case None =>
       IO.raiseError(error)
   }
+}
+
+extension[S <: NodeState] (self: S) {
+  def updated(localState: LocalState)(using lens: NodeStateLens[S]): S =
+    lens.updated(self, localState)
 }
 
 case class NodeTrace(

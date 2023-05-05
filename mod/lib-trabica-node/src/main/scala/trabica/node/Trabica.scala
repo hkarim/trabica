@@ -13,7 +13,7 @@ class Trabica(
   val context: NodeContext,
   val quorumId: String,
   val quorumPeer: Peer,
-  val ref: Ref[IO, Node],
+  val ref: Ref[IO, Node[_ <: NodeState]],
   val events: Queue[IO, Event],
   val supervisor: Supervisor[IO],
   val trace: Ref[IO, NodeTrace],
@@ -50,8 +50,8 @@ class Trabica(
       .compile
       .drain
 
-  private def startup(
-    newNode: Node,
+  private def startup[S <: NodeState](
+    newNode: Node[S],
     signal: Interrupt,
     loggingPrefix: String,
   ): IO[Unit] = for {
@@ -160,7 +160,7 @@ object Trabica {
         events <- Queue.unbounded[IO, Event]
         trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
         node   <- Node.instance(context, quorumNode.id, quorumPeer, events, supervisor, trace, state)
-        ref    <- Ref.of[IO, Node](node)
+        ref    <- Ref.of[IO, Node[_ <: NodeState]](node)
         trabica = new Trabica(context, quorumNode.id, quorumPeer, ref, events, supervisor, trace)
         _ <- node.run.supervise(supervisor)
         _ <- trabica.run.supervise(supervisor)

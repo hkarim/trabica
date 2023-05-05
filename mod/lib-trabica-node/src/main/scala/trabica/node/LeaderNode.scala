@@ -20,9 +20,9 @@ class LeaderNode(
   val streamSignal: SignallingRef[IO, Boolean],
   val supervisor: Supervisor[IO],
   val trace: NodeTrace,
-) extends Node {
+) extends Node[NodeState.Leader] {
 
-  private final val logger = scribe.cats[IO]
+  override final val logger = scribe.cats[IO]
 
   private final val id: Int = trace.leaderId
 
@@ -31,12 +31,13 @@ class LeaderNode(
   private final val heartbeatStreamRate: Long =
     context.config.getLong("trabica.leader.heartbeat-stream.rate")
 
+  def lens: NodeStateLens[NodeState.Leader] =
+    NodeStateLens[NodeState.Leader]
+
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >>
       signal.complete(Right(())).void >>
       logger.debug(s"$prefix interrupted")
-
-  override def stateIO: IO[NodeState] = state.get
 
   private def heartbeatStream(clients: Vector[NodeApi]): IO[Unit] =
     Stream(clients)

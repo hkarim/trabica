@@ -19,9 +19,9 @@ class FollowerNode(
   val heartbeat: Ref[IO, Option[Unit]],
   val supervisor: Supervisor[IO],
   val trace: NodeTrace,
-) extends Node {
+) extends Node[NodeState.Follower] {
 
-  private final val logger = scribe.cats[IO]
+  override final val logger = scribe.cats[IO]
 
   private final val id: Int = trace.followerId
 
@@ -33,7 +33,8 @@ class FollowerNode(
   private final val heartbeatStreamTimeoutMax: Long =
     context.config.getLong("trabica.follower.heartbeat-stream.timeout.max")
 
-  override def stateIO: IO[NodeState] = state.get
+  def lens: NodeStateLens[NodeState.Follower] =
+    NodeStateLens[NodeState.Follower]
 
   def run: IO[FiberIO[Unit]] =
     Stream
@@ -114,24 +115,6 @@ class FollowerNode(
 
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     heartbeat.set(Some(())) >> IO.pure(true)
-
-  override def vote(request: VoteRequest): IO[Boolean] =
-    for {
-      currentState <- state.get
-      result <-
-        currentState.localState.votedFor match {
-          case Some(node) =>
-            IO.pure(request.header.flatMap(_.node).contains(node))
-          case None =>
-            val ls = currentState.localState.copy(
-              votedFor = request.header.flatMap(_.node)
-            )
-            for {
-              _ <- state.set(currentState.copy(localState = ls))
-              _ <- context.store.writeState(ls)
-            } yield true
-        }
-    } yield result
 
 }
 

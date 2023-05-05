@@ -7,7 +7,7 @@ enum NodeStateTag {
   case Leader
 }
 
-sealed trait NodeState {
+sealed trait NodeState { self =>
   def localState: LocalState
   def commitIndex: Index
   def lastApplied: Index

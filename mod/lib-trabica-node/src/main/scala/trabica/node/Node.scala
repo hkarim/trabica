@@ -3,11 +3,14 @@ package trabica.node
 import cats.effect.*
 import cats.effect.std.{Queue, Supervisor}
 import cats.syntax.all.*
+import scribe.Scribe
 import trabica.model.*
 import trabica.net.NodeApi
 import trabica.store.FsmStore
 
-trait Node {
+trait Node[S <: NodeState] {
+
+  def logger: Scribe[IO]
 
   def context: NodeContext
 
@@ -15,7 +18,9 @@ trait Node {
 
   def quorumPeer: Peer
 
-  def stateIO: IO[NodeState]
+  def state: Ref[IO, S]
+
+  given lens: NodeStateLens[S]
 
   def run: IO[FiberIO[Unit]]
 
@@ -25,19 +30,47 @@ trait Node {
 
   def appendEntries(request: AppendEntriesRequest): IO[Boolean]
 
-  def vote(request: VoteRequest): IO[Boolean]
+  def vote(request: VoteRequest): IO[Boolean] =
+    for {
+      currentState <- state.get
+      header       <- request.header.required(NodeError.InvalidMessage)
+      _ <- logger.debug(
+        s"$prefix vote requested",
+        s"votedFor=${currentState.localState.votedFor},",
+        s"term=${currentState.localState.currentTerm},",
+        s"request.term=${header.term}"
+      )
+      result <-
+        currentState.localState.votedFor match {
+          case Some(node) =>
+            IO.pure(request.header.flatMap(_.node).contains(node))
+          case None =>
+            val voteGranted = header.term > currentState.localState.currentTerm
+            for {
+              _ <-
+                if voteGranted then {
+                  for {
+                    qn <- header.node.required(NodeError.InvalidMessage)
+                    ls = currentState.localState.copy(votedFor = qn.some)
+                    _ <- state.set(currentState.updated(localState = ls))
+                    _ <- context.store.writeState(ls)
+                  } yield true
+                } else IO.pure(false)
+            } yield voteGranted
+        }
+    } yield result
 
   def quorumNode: QuorumNode =
     QuorumNode(id = quorumId, peer = quorumPeer.some)
 
   def header: IO[Header] =
     for {
-      messageId <- context.messageId.getAndUpdate(_.increment)
-      state     <- stateIO
+      messageId    <- context.messageId.getAndUpdate(_.increment)
+      currentState <- state.get
       h = Header(
         node = Some(quorumNode),
         messageId = messageId.value,
-        term = state.localState.currentTerm,
+        term = currentState.localState.currentTerm,
       )
     } yield h
 
@@ -96,7 +129,7 @@ object Node {
     supervisor: Supervisor[IO],
     trace: Ref[IO, NodeTrace],
     state: NodeState.Follower
-  ): IO[Node] =
+  ): IO[Node[NodeState.Follower]] =
     for {
       s <- Deferred[IO, Either[Throwable, Unit]]
       n <- follower(context, quorumId, quorumPeer, events, supervisor, trace, s, state)
@@ -111,7 +144,7 @@ object Node {
     trace: Ref[IO, NodeTrace],
     signal: Interrupt,
     state: NodeState.Follower,
-  ): IO[Node] =
+  ): IO[Node[NodeState.Follower]] =
     for {
       r <- Ref.of[IO, NodeState.Follower](state)
       t <- trace.incrementFollower
