@@ -220,7 +220,10 @@ object FsmFileStore {
     val logPath   = rootPath.resolve("log.trabica").normalize
     val statePath = rootPath.resolve("state.trabica").normalize
 
-    val readWriteOptions = util.EnumSet.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE)
+    val readWriteOptions = util.EnumSet.of(
+      StandardOpenOption.CREATE,
+      StandardOpenOption.READ,
+      StandardOpenOption.WRITE)
     val appendOptions    = util.EnumSet.of(StandardOpenOption.CREATE, StandardOpenOption.APPEND)
     val readOptions      = util.EnumSet.of(StandardOpenOption.READ)
 

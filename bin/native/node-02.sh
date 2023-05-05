@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-mod/node-template/target/universal/stage/bin/node-template -- \
-join \
+mod/node-template/target/graalvm-native-image/node-template \
+startup \
 --id 02 \
 --host 0.0.0.0 \
 --port 6002 \

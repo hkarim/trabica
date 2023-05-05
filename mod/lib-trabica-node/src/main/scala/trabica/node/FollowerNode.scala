@@ -61,7 +61,7 @@ class FollowerNode(
             (
               None,
               logger.debug(s"$prefix heartbeat no elements, will timeout") >>
-                timeout
+                tryTimeout
             )
         }
       }
@@ -69,7 +69,7 @@ class FollowerNode(
         Stream.eval {
           e match {
             case _: TimeoutException =>
-              timeout
+              tryTimeout
             case e =>
               logger.error(s"$prefix error encountered in heartbeat stream: ${e.getMessage}", e) >>
                 IO.raiseError(e)
@@ -79,6 +79,15 @@ class FollowerNode(
       .onFinalize {
         logger.debug(s"$prefix heartbeat stream finalized")
       }
+
+  private def tryTimeout: IO[Unit] =
+    for {
+      peers <- quorumPeers.handleErrorWith { e =>
+        logger.debug(s"$prefix canceling timeout, no peers available: ${e.getMessage}") >>
+          IO.pure(Vector.empty)
+      }
+      _ <- if peers.nonEmpty then timeout else IO.unit
+    } yield ()
 
   private def timeout: IO[Unit] =
     for {
@@ -104,10 +113,25 @@ class FollowerNode(
     } yield ()
 
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
-    ???
+    heartbeat.set(Some(())) >> IO.pure(true)
 
   override def vote(request: VoteRequest): IO[Boolean] =
-    ???
+    for {
+      currentState <- state.get
+      result <-
+        currentState.localState.votedFor match {
+          case Some(node) =>
+            IO.pure(request.header.flatMap(_.node).contains(node))
+          case None =>
+            val ls = currentState.localState.copy(
+              votedFor = request.header.flatMap(_.node)
+            )
+            for {
+              _ <- state.set(currentState.copy(localState = ls))
+              _ <- context.store.writeState(ls)
+            } yield true
+        }
+    } yield result
 
 }
 

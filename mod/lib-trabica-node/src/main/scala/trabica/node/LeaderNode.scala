@@ -84,11 +84,7 @@ class LeaderNode(
       case Left(e) =>
         logger.trace(s"$prefix no response from peer ${peer.host}:${peer.port}, error: ${e.getMessage}")
       case Right(r) =>
-        for {
-          header       <- r.header.required(NodeError.InvalidMessage)
-          currentState <- state.get
-          _            <- Node.termCheck(header, currentState, events)
-        } yield ()
+        logger.trace(s"$prefix response `${r.success}` from peer ${peer.host}:${peer.port}")
     }
 
   def run: IO[FiberIO[Unit]] =

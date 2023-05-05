@@ -125,9 +125,9 @@ object Node {
     case c: CliCommand.Bootstrap =>
       logger.debug("initiating node state in bootstrap mode") >>
         bootstrap(c, store)
-    case _: CliCommand.Startup =>
+    case c: CliCommand.Startup =>
       logger.debug("initiating node state in startup mode") >>
-        startup(store)
+        startup(c, store)
   }
 
   private def bootstrap(command: CliCommand.Bootstrap, store: FsmStore): IO[NodeState.Follower] = {
@@ -138,30 +138,42 @@ object Node {
       )
     val localState =
       LocalState(
-        node = Some(quorumNode),
-        currentTerm = 0,
+        node = quorumNode.some,
+        currentTerm = 0L,
         votedFor = None,
       )
 
     for {
-      _ <- store.bootstrap
+      _ <- store.bootstrap // clear all current store managed files
+      data = Quorum(nodes = command.quorumPeers).toByteString
+      _ <- store.append(LogEntry(index = 1L, term = 0L, tag = LogEntryTag.Conf, data = data))
       _ <- store.writeState(localState)
       nodeState = NodeState.Follower(
         localState = localState,
-        commitIndex = Index.zero,
-        lastApplied = Index.zero,
+        commitIndex = Index.one,
+        lastApplied = Index.one,
       )
     } yield nodeState
   }
 
-  private def startup(store: FsmStore): IO[NodeState.Follower] =
+  private def startup(command: CliCommand.Startup, store: FsmStore): IO[NodeState.Follower] =
     for {
       localStateOption <- store.readState
-      localState <- IO.fromOption(localStateOption)(
-        NodeError.StoreError(
-          "local state does not exist, restore the state manually or start in bootstrap mode"
-        )
+      quorumNode = QuorumNode(
+        id = command.id,
+        peer = Some(Peer(host = command.host, port = command.port))
       )
+      localState = localStateOption match {
+        case Some(value) =>
+          value.copy(node = quorumNode.some)
+        case None =>
+          LocalState(
+            node = quorumNode.some,
+            currentTerm = 0,
+            votedFor = None,
+          )
+      }
+      _           <- store.writeState(localState)
       entryOption <- store.last
       index = entryOption.map(_.index).map(Index.of).getOrElse(Index.zero)
       nodeState = NodeState.Follower(
