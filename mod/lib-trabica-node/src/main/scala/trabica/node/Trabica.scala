@@ -130,6 +130,8 @@ class Trabica(
 
 object Trabica {
 
+  private final val logger = scribe.cats[IO]
+
   private def logging(level: scribe.Level): IO[Unit] = IO.delay {
     scribe.Logger.root
       .clearHandlers()
@@ -163,6 +165,7 @@ object Trabica {
         ref    <- Ref.of[IO, Node[_ <: NodeState]](node)
         trabica = new Trabica(context, quorumNode.id, quorumPeer, ref, events, supervisor, trace)
         _ <- node.run.supervise(supervisor)
+        _ <- logger.info(s"starting up in mode follower")
         _ <- trabica.run.supervise(supervisor)
         _ <- networking.server(trabica, quorumPeer.host, quorumPeer.port).useForever
       } yield ()
