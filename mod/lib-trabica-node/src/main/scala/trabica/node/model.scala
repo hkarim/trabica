@@ -1,7 +1,8 @@
 package trabica.node
 
 import cats.effect.*
-import trabica.model.NodeError
+import com.google.protobuf.CodedInputStream
+import trabica.model.{LogEntry, LogEntryTag, NodeError, Quorum}
 
 type Interrupt = Deferred[IO, Either[Throwable, Unit]]
 
@@ -9,17 +10,27 @@ object Interrupt {
   def instance: IO[Interrupt] = Deferred[IO, Either[Throwable, Unit]]
 }
 
+extension (self: LogEntry) {
+  def quorum: IO[Option[Quorum]] =
+    if self.tag == LogEntryTag.Conf then {
+      IO.delay {
+        Some(
+          Quorum.parseFrom(CodedInputStream.newInstance(self.data.asReadOnlyByteBuffer()))
+        )
+      }
+    } else IO.pure(None)
+}
+
 extension [A](self: Option[A]) {
-  def required: IO[A] = self match {
+  def required(error: => NodeError): IO[A] = self match {
     case Some(value) =>
       IO.pure(value)
     case None =>
-      IO.raiseError(NodeError.InvalidMessage)
+      IO.raiseError(error)
   }
 }
 
 case class NodeTrace(
-  orphanId: Int,
   followerId: Int,
   candidateId: Int,
   leaderId: Int,
@@ -27,12 +38,10 @@ case class NodeTrace(
 
 object NodeTrace {
   def instance: NodeTrace =
-    NodeTrace(0, 0, 0, 0)
+    NodeTrace(0, 0, 0)
 }
 
 extension (self: Ref[IO, NodeTrace]) {
-  def incrementOrphan: IO[NodeTrace] =
-    self.updateAndGet(t => t.copy(orphanId = t.orphanId + 1))
 
   def incrementFollower: IO[NodeTrace] =
     self.updateAndGet(t => t.copy(followerId = t.followerId + 1))

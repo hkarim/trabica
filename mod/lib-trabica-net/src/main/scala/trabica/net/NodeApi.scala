@@ -5,12 +5,15 @@ import trabica.model.*
 
 trait NodeApi {
 
-  def peer: Peer
+  def quorumId: String
+  
+  def quorumPeer: Peer
+  
+  def quorumNode: QuorumNode =
+    QuorumNode(id = quorumId, peer = Some(quorumPeer))
 
   def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse]
 
   def vote(request: VoteRequest): IO[VoteResponse]
-
-  def join(request: JoinRequest): IO[JoinResponse]
 
 }

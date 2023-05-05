@@ -9,8 +9,23 @@ message Peer {
   int32 port = 2;
 }
 
+message QuorumNode {
+  string id = 1;
+  Peer peer = 2;
+}
+
+message LocalState {
+  QuorumNode node = 1;
+  int64 currentTerm = 2;
+  QuorumNode votedFor = 3;
+}
+
+message Quorum {
+  repeated QuorumNode nodes = 1;
+}
+
 message Header {
-  Peer peer = 1;
+  QuorumNode node = 1;
   int64 messageId = 2;
   int64 term = 3;
 }
@@ -29,11 +44,10 @@ message LogEntry {
 
 message AppendEntriesRequest {
   Header header = 1;
-  repeated Peer peers = 2;
-  int64 prevLogIndex = 3;
-  int64 prevLogTerm = 4;
-  int64 leaderCommitIndex = 5;
-  repeated LogEntry entries = 6;
+  int64 prevLogIndex = 2;
+  int64 prevLogTerm = 3;
+  int64 commitIndex = 4;
+  repeated LogEntry entries = 5;
 }
 
 message AppendEntriesResponse {
@@ -50,26 +64,4 @@ message VoteRequest {
 message VoteResponse {
   Header header = 1;
   bool voteGranted = 2;
-}
-
-message JoinRequest {
-  Header header = 1;
-}
-
-message JoinResponse {
-
-  message Accepted {}
-  message Forward {
-    Peer leader = 1;
-  }
-  message UnknownLeader {
-    repeated Peer knownPeers = 1;
-  }
-
-  Header header = 1;
-  oneof status {
-    Accepted accepted = 2;
-    Forward forward = 3;
-    UnknownLeader unknownLeader = 4;
-  }
 }

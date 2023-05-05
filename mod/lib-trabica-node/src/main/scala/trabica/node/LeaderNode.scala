@@ -12,6 +12,8 @@ import scala.concurrent.duration.*
 
 class LeaderNode(
   val context: NodeContext,
+  val quorumId: String,
+  val quorumPeer: Peer,
   val state: Ref[IO, NodeState.Leader],
   val events: Queue[IO, Event],
   val signal: Interrupt,
@@ -24,7 +26,7 @@ class LeaderNode(
 
   private final val id: Int = trace.leaderId
 
-  private final val prefix: String = s"[leader-$id]"
+  override final val prefix: String = s"[leader-$id]"
 
   private final val heartbeatStreamRate: Long =
     context.config.getLong("trabica.leader.heartbeat-stream.rate")
@@ -35,20 +37,6 @@ class LeaderNode(
       logger.debug(s"$prefix interrupted")
 
   override def stateIO: IO[NodeState] = state.get
-
-  private def clients: Resource[IO, Vector[NodeApi]] =
-    for {
-      currentState <- Resource.eval(state.get)
-      clients <- currentState.peers.toVector.traverse { peer =>
-        context.networking.client(prefix, peer)
-      }
-    } yield clients
-
-  private def restartHeartbeatStream: IO[FiberIO[Unit]] =
-    streamSignal.set(true) >>
-      streamSignal.set(false) >>
-      logger.debug(s"$prefix heartbeat stream restarting") >>
-      clients.use(heartbeatStream).supervise(supervisor)
 
   private def heartbeatStream(clients: Vector[NodeApi]): IO[Unit] =
     Stream(clients)
@@ -66,14 +54,15 @@ class LeaderNode(
               h            <- header(currentState)
               request = AppendEntriesRequest(
                 header = h.some,
-                peers = currentState.peers.toSeq,
+                prevLogIndex = currentState.commitIndex.value - 1,
+                prevLogTerm = currentState.localState.currentTerm - 1,
               )
               responses <- cs.parTraverse { c =>
-                logger.trace(s"$prefix sending heartbeat to ${c.peer.host}:${c.peer.port}") >>
+                logger.trace(s"$prefix sending heartbeat to ${c.quorumPeer.host}:${c.quorumPeer.port}") >>
                   c.appendEntries(request)
                     .timeout(100.milliseconds)
                     .attempt
-                    .flatMap(r => onResponse(c.peer, r))
+                    .flatMap(r => onResponse(c.quorumPeer, r))
               }
             } yield responses
           }
@@ -96,7 +85,7 @@ class LeaderNode(
         logger.trace(s"$prefix no response from peer ${peer.host}:${peer.port}, error: ${e.getMessage}")
       case Right(r) =>
         for {
-          header       <- r.header.required
+          header       <- r.header.required(NodeError.InvalidMessage)
           currentState <- state.get
           _            <- Node.termCheck(header, currentState, events)
         } yield ()
@@ -108,39 +97,29 @@ class LeaderNode(
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     for {
       currentState <- state.get
-      header       <- request.header.required
+      header       <- request.header.required(NodeError.InvalidMessage)
       _            <- Node.termCheck(header, currentState, events)
     } yield false
-
-  override def join(request: JoinRequest): IO[JoinResponse.Status] =
-    for {
-      peerHeader <- request.header.required
-      peer       <- peerHeader.peer.required
-      _          <- logger.debug(s"$prefix peer ${peer.host}:${peer.port} joining")
-      _ <- state.flatModify { currentState =>
-        if !currentState.peers.contains(peer) then {
-          val newState = currentState.copy(peers = currentState.peers + peer)
-          (newState, restartHeartbeatStream)
-        } else (currentState, IO.unit)
-      }
-      status = JoinResponse.Status.Accepted(
-        JoinResponse.Accepted()
-      )
-    } yield status
 
   override def vote(request: VoteRequest): IO[Boolean] =
     for {
       currentState <- state.get
-      header       <- request.header.required
+      header       <- request.header.required(NodeError.InvalidMessage)
       _ <- logger.debug(
-        s"$prefix vote requested. votedFor=${currentState.votedFor}, term=${currentState.currentTerm}, request.term=${header.term}"
+        s"$prefix vote requested",
+        s"votedFor=${currentState.localState.votedFor},",
+        s"term=${currentState.localState.currentTerm},",
+        s"request.term=${header.term}"
       )
-      voteGranted = currentState.votedFor.isEmpty && Term.of(header.term) > currentState.currentTerm
+      voteGranted =
+        currentState.localState.votedFor.isEmpty &&
+          header.term > currentState.localState.currentTerm
       _ <-
         if voteGranted then {
           for {
-            peer <- header.peer.required
-            _    <- state.set(currentState.copy(votedFor = peer.some))
+            qn <- header.node.required(NodeError.InvalidMessage)
+            ls = currentState.localState.copy(votedFor = qn.some)
+            _ <- state.set(currentState.copy(localState = ls))
           } yield ()
         } else IO.unit
     } yield voteGranted
@@ -150,6 +129,8 @@ class LeaderNode(
 object LeaderNode {
   def instance(
     context: NodeContext,
+    quorumId: String,
+    quorumPeer: Peer,
     state: Ref[IO, NodeState.Leader],
     events: Queue[IO, Event],
     signal: Interrupt,
@@ -159,6 +140,8 @@ object LeaderNode {
     streamSignal <- SignallingRef.of[IO, Boolean](false)
     node = new LeaderNode(
       context,
+      quorumId,
+      quorumPeer,
       state,
       events,
       signal,

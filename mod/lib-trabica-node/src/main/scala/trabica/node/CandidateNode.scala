@@ -13,6 +13,8 @@ import scala.concurrent.duration.*
 
 class CandidateNode(
   val context: NodeContext,
+  val quorumId: String,
+  val quorumPeer: Peer,
   val state: Ref[IO, NodeState.Candidate],
   val events: Queue[IO, Event],
   val signal: Interrupt,
@@ -25,7 +27,7 @@ class CandidateNode(
 
   private final val id: Int = trace.candidateId
 
-  private final val prefix: String = s"[candidate-$id]"
+  override final val prefix: String = s"[candidate-$id]"
 
   private final val voteStreamRate: Long =
     context.config.getLong("trabica.candidate.vote-stream.rate")
@@ -46,19 +48,11 @@ class CandidateNode(
 
   override def stateIO: IO[NodeState] = state.get
 
-  private def clients: Resource[IO, Vector[NodeApi]] =
-    for {
-      s <- Resource.eval(state.get)
-      clients <- s.peers.toVector.traverse { peer =>
-        context.networking.client(prefix, peer)
-      }
-    } yield clients
-
   private def timeout: IO[Unit] =
     for {
       _ <- logger.debug(s"$prefix vote stream timed out, restarting election")
-      s <- state.updateAndGet(s => s.copy(currentTerm = s.currentTerm.increment))
-      _ <- logger.debug(s"$prefix starting vote stream with term ${s.currentTerm}")
+      s <- state.updateAndGet(s => s.copy(votingTerm = s.votingTerm.increment))
+      _ <- logger.debug(s"$prefix starting vote stream with term ${s.votingTerm}")
       _ <- events.offer(
         Event.NodeStateChanged(s, s, StateTransitionReason.ConfigurationChanged)
       )
@@ -83,7 +77,7 @@ class CandidateNode(
                 n.vote(request)
                   .timeout(voteRequestTimeout.milliseconds)
                   .attempt
-                  .flatMap(r => onVote(n.peer, r))
+                  .flatMap(r => onVote(n, r))
               }
             } yield responses
           }
@@ -109,17 +103,21 @@ class CandidateNode(
           }
       }
 
-  private def onVote(peer: Peer, response: Either[Throwable, VoteResponse]): IO[Unit] =
+  private def onVote(client: NodeApi, response: Either[Throwable, VoteResponse]): IO[Unit] =
     response match {
       case Left(e) =>
-        logger.debug(s"$prefix vote response error from peer ${peer.host}:${peer.port},  ${e.getMessage}, ignoring")
-      case Right(VoteResponse(Some(header), true, _)) =>
+        val peer = client.quorumPeer
+        logger.debug(
+          s"$prefix vote response error from peer ${peer.host}:${peer.port}",
+          s"${e.getMessage}, ignoring"
+        )
+      case Right(VoteResponse(Some(_), true, _)) =>
+        val peer = client.quorumPeer
         for {
-          peer <- header.peer.required
-          _    <- logger.debug(s"$prefix vote granted from peer ${peer.host}:${peer.port}")
+          _     <- logger.debug(s"$prefix vote granted from peer ${peer.host}:${peer.port}")
+          peers <- quorumPeers
           _ <- state.flatModify { currentState =>
-            val peers            = currentState.peers
-            val votes            = currentState.votes + peer
+            val votes            = currentState.votes + client.quorumNode
             val currentlyElected = currentState.elected
             val newlyElected     = votes.size >= math.ceil(peers.size / 2) + 1
             // the purpose here is to prevent firing state change events once we're already elected
@@ -128,10 +126,11 @@ class CandidateNode(
             val io =
               if newlyElected && !currentlyElected then {
                 val newState = NodeState.Leader(
-                  self = currentState.self,
-                  peers = currentState.peers,
-                  currentTerm = currentState.currentTerm,
-                  votedFor = None,
+                  localState = LocalState(
+                    node = QuorumNode(id = quorumId, peer = quorumPeer.some).some,
+                    currentTerm = currentState.votingTerm.value,
+                    votedFor = None,
+                  ),
                   commitIndex = currentState.commitIndex,
                   lastApplied = currentState.lastApplied,
                   nextIndex = Map.empty,
@@ -144,11 +143,9 @@ class CandidateNode(
             (currentState.copy(votes = votes, elected = newlyElected), io)
           }
         } yield ()
-      case Right(VoteResponse(Some(header), false, _)) =>
-        for {
-          peer <- header.peer.required
-          _    <- logger.debug(s"$prefix vote denied from peer ${peer.host}:${peer.port}")
-        } yield ()
+      case Right(VoteResponse(Some(_), false, _)) =>
+        val peer = client.quorumPeer
+        logger.debug(s"$prefix vote denied from peer ${peer.host}:${peer.port}")
       case Right(v) =>
         logger.debug(s"$prefix invalid vote message received: $v") >>
           IO.raiseError(NodeError.InvalidMessage)
@@ -160,46 +157,24 @@ class CandidateNode(
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     for {
       currentState <- state.get
-      header       <- request.header.required
-      peer         <- header.peer.required
+      header       <- request.header.required(NodeError.InvalidMessage)
+      node         <- header.node.required(NodeError.InvalidMessage)
+      peer         <- node.peer.required(NodeError.InvalidMessage)
       _ <-
-        if currentState.currentTerm.value == header.term then {
+        if currentState.votingTerm.value == header.term then {
           // a leader has been elected other than this candidate, change state to follower
           val newState = NodeState.Follower(
-            self = currentState.self,
-            peers = currentState.peers + peer,
-            leader = peer,
-            currentTerm = Term.of(header.term),
-            votedFor = None,
+            localState = LocalState(
+              node = QuorumNode(id = quorumId, peer = Some(quorumPeer)).some,
+              currentTerm = header.term,
+              votedFor = None,
+            ),
             commitIndex = currentState.commitIndex,
             lastApplied = currentState.lastApplied
           )
           events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.HigherTermDiscovered))
         } else Node.termCheck(header, currentState, events)
     } yield false
-
-  override def join(request: JoinRequest): IO[JoinResponse.Status] =
-    for {
-      peerHeader   <- request.header.required
-      peer         <- peerHeader.peer.required
-      _            <- logger.debug(s"$prefix peer ${peer.host}:${peer.port} requested to join")
-      currentState <- state.get
-      response = JoinResponse.Status.UnknownLeader(
-        JoinResponse.UnknownLeader(knownPeers = currentState.peers.toSeq)
-      )
-      _ <- state.flatModify { currentState =>
-        val newState = currentState.copy(peers = currentState.peers + peer)
-        if !currentState.peers.contains(peer) then {
-          val restart = for {
-            _ <- streamSignal.set(true)
-            _ <- streamSignal.set(false)
-            f <- run
-          } yield f
-          (currentState, restart)
-        } else (newState, IO.unit)
-      }
-
-    } yield response
 
   override def vote(request: VoteRequest): IO[Boolean] =
     IO.pure(false)
@@ -208,6 +183,8 @@ class CandidateNode(
 object CandidateNode {
   def instance(
     context: NodeContext,
+    quorumId: String,
+    quorumPeer: Peer,
     state: Ref[IO, NodeState.Candidate],
     events: Queue[IO, Event],
     signal: Interrupt,
@@ -217,6 +194,8 @@ object CandidateNode {
     streamSignal <- SignallingRef.of[IO, Boolean](false)
     node = new CandidateNode(
       context,
+      quorumId,
+      quorumPeer,
       state,
       events,
       signal,

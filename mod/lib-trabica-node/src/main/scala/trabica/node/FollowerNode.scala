@@ -11,6 +11,8 @@ import scala.concurrent.duration.*
 
 class FollowerNode(
   val context: NodeContext,
+  val quorumId: String,
+  val quorumPeer: Peer,
   val state: Ref[IO, NodeState.Follower],
   val events: Queue[IO, Event],
   val signal: Interrupt,
@@ -23,7 +25,7 @@ class FollowerNode(
 
   private final val id: Int = trace.followerId
 
-  private final val prefix: String = s"[follower-$id]"
+  override final val prefix: String = s"[follower-$id]"
 
   private final val heartbeatStreamTimeoutMin: Long =
     context.config.getLong("trabica.follower.heartbeat-stream.timeout.min")
@@ -82,65 +84,38 @@ class FollowerNode(
     for {
       _            <- logger.debug(s"$prefix heartbeat stream timed out")
       currentState <- state.get
-      _            <- logger.debug(s"$prefix switching to candidate, ${currentState.peers.size} peer(s) known")
+      peers        <- quorumPeers
+      _            <- logger.debug(s"$prefix switching to candidate, ${peers.size} peer(s) known")
+      newTerm = currentState.localState.currentTerm + 1
+      qn      = quorumNode
       newState = NodeState.Candidate(
-        self = currentState.self,
-        peers = currentState.peers,
-        currentTerm = currentState.currentTerm.increment,
-        votedFor = currentState.self.some, // vote for self
+        localState = LocalState(
+          node = qn.some,
+          currentTerm = newTerm,
+          votedFor = qn.some,
+        ),
         commitIndex = currentState.commitIndex,
         lastApplied = currentState.lastApplied,
-        votes = Set(currentState.self),
+        votingTerm = Term.of(newTerm),
+        votes = Set(qn),
         elected = false,
       )
       - <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.NoHeartbeat))
     } yield ()
 
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
-    for {
-      _            <- heartbeat.set(Some(()))
-      currentState <- state.get
-      header       <- request.header.required
-      peer         <- header.peer.required
-      _ <-
-        if !currentState.peers.contains(peer) then
-          logger.debug(s"$prefix updating peers, ${request.peers.length} peer(s) known to leader") >>
-            state.set(currentState.copy(peers = request.peers.toSet + peer - currentState.self))
-        else IO.unit
-      _ <- Node.termCheck(header, currentState, events)
-    } yield false
-
-  override def join(request: JoinRequest): IO[JoinResponse.Status] =
-    for {
-      peerHeader   <- request.header.required
-      peer         <- peerHeader.peer.required
-      _            <- logger.debug(s"$prefix peer ${peer.host}:${peer.port} joining")
-      currentState <- state.get
-      status = JoinResponse.Status.Forward(
-        JoinResponse.Forward(leader = currentState.leader.some)
-      )
-    } yield status
+    ???
 
   override def vote(request: VoteRequest): IO[Boolean] =
-    state.flatModify { currentState =>
-      request.header match {
-        case Some(header) =>
-          header.peer match {
-            case Some(peer) if currentState.votedFor.isEmpty && Term.of(header.term) > currentState.currentTerm =>
-              (currentState.copy(votedFor = peer.some), IO.pure(true))
-            case _ =>
-              (currentState, IO.pure(false))
-          }
-        case None =>
-          (currentState, IO.pure(false))
-      }
-    }
+    ???
 
 }
 
 object FollowerNode {
   def instance(
     context: NodeContext,
+    quorumId: String,
+    quorumPeer: Peer,
     state: Ref[IO, NodeState.Follower],
     events: Queue[IO, Event],
     signal: Interrupt,
@@ -150,6 +125,8 @@ object FollowerNode {
     heartbeat <- Ref.of[IO, Option[Unit]](None)
     node = new FollowerNode(
       context,
+      quorumId,
+      quorumPeer,
       state,
       events,
       signal,

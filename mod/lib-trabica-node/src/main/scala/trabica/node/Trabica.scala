@@ -11,6 +11,8 @@ import trabica.store.FsmStore
 
 class Trabica(
   val context: NodeContext,
+  val quorumId: String,
+  val quorumPeer: Peer,
   val ref: Ref[IO, Node],
   val events: Queue[IO, Event],
   val supervisor: Supervisor[IO],
@@ -18,8 +20,6 @@ class Trabica(
 ) extends NodeApi {
 
   private final val logger = scribe.cats[IO]
-
-  final val peer: Peer = context.peer
 
   def run: IO[Unit] =
     eventStream
@@ -29,8 +29,6 @@ class Trabica(
       _      <- logger.debug(s"transitioning [from: ${oldState.tag}, to: ${newState.tag}, reason: $reason]")
       signal <- Interrupt.instance
       f <- newState match {
-        case state: NodeState.Orphan =>
-          orphan(state, signal).supervise(supervisor)
         case state: NodeState.NonVoter => ???
         case state: NodeState.Follower =>
           follower(state, signal).supervise(supervisor)
@@ -38,7 +36,6 @@ class Trabica(
           candidate(state, signal).supervise(supervisor)
         case state: NodeState.Leader =>
           leader(state, signal).supervise(supervisor)
-        case state: NodeState.Joint => ???
       }
     } yield f
 
@@ -80,21 +77,12 @@ class Trabica(
     }
   } yield ()
 
-  private def orphan(newState: NodeState.Orphan, s: Interrupt): IO[Unit] =
-    for {
-      r <- Ref.of[IO, NodeState.Orphan](newState)
-      t <- trace.incrementOrphan
-      l = s"[orphan-${t.orphanId}]"
-      n <- OrphanNode.instance(context, r, events, s, supervisor, t)
-      _ <- startup(n, s, l)
-    } yield ()
-
   private def follower(newState: NodeState.Follower, s: Interrupt): IO[Unit] =
     for {
       r <- Ref.of[IO, NodeState.Follower](newState)
       t <- trace.incrementFollower
       l = s"[follower-${t.followerId}]"
-      n <- FollowerNode.instance(context, r, events, s, supervisor, t)
+      n <- FollowerNode.instance(context, quorumId, quorumPeer, r, events, s, supervisor, t)
       _ <- startup(n, s, l)
     } yield ()
 
@@ -103,7 +91,7 @@ class Trabica(
       r <- Ref.of[IO, NodeState.Candidate](newState)
       t <- trace.incrementCandidate
       l = s"[candidate-${t.candidateId}]"
-      n <- CandidateNode.instance(context, r, events, s, supervisor, t)
+      n <- CandidateNode.instance(context, quorumId, quorumPeer, r, events, s, supervisor, t)
       _ <- startup(n, s, l)
     } yield ()
 
@@ -112,7 +100,7 @@ class Trabica(
       r <- Ref.of[IO, NodeState.Leader](newState)
       t <- trace.incrementLeader
       l = s"[leader-${t.leaderId}]"
-      n <- LeaderNode.instance(context, r, events, s, supervisor, t)
+      n <- LeaderNode.instance(context, quorumId, quorumPeer, r, events, s, supervisor, t)
       _ <- startup(n, s, l)
     } yield ()
 
@@ -138,16 +126,6 @@ class Trabica(
       )
     } yield response
 
-  override def join(request: JoinRequest): IO[JoinResponse] =
-    for {
-      server <- ref.get
-      header <- server.header
-      status <- server.join(request)
-      response = JoinResponse(
-        header = header.some,
-        status = status,
-      )
-    } yield response
 }
 
 object Trabica {
@@ -162,28 +140,32 @@ object Trabica {
 
   def run(command: CliCommand, store: FsmStore, networking: Networking): IO[Unit] =
     Supervisor[IO](await = false).use { supervisor =>
-        for {
-          config    <- IO.blocking(ConfigFactory.load())
-          _         <- logging(scribe.Level(config.getString("trabica.log.level")))
-          messageId <- Ref.of[IO, MessageId](MessageId.zero)
-          context = NodeContext(
-            config = config,
-            peer = Peer(command.host, command.port),
-            messageId = messageId,
-            store = store,
-            networking = networking,
-          )
-          state  <- Node.state(command)
-          events <- Queue.unbounded[IO, Event]
-          trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
-          node   <- Node.instance(context, events, supervisor, trace, state)
-          ref    <- Ref.of[IO, Node](node)
-          trabica = new Trabica(context, ref, events, supervisor, trace)
-          _ <- node.run.supervise(supervisor)
-          _ <- trabica.run.supervise(supervisor)
-          _ <- networking.server(trabica, command).useForever
-        } yield ()
-      }
-
+      for {
+        config    <- IO.blocking(ConfigFactory.load())
+        _         <- logging(scribe.Level(config.getString("trabica.log.level")))
+        messageId <- Ref.of[IO, MessageId](MessageId.zero)
+        state     <- Node.state(command, store)
+        quorumNode <- state.localState.node.required(
+          NodeError.StoreError("`localState.node` configuration not found in local state")
+        )
+        quorumPeer <- quorumNode.peer.required(
+          NodeError.StoreError("`localState.node.peer` configuration not found in local state")
+        )
+        context = NodeContext(
+          config = config,
+          messageId = messageId,
+          store = store,
+          networking = networking,
+        )
+        events <- Queue.unbounded[IO, Event]
+        trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
+        node   <- Node.instance(context, quorumNode.id, quorumPeer, events, supervisor, trace, state)
+        ref    <- Ref.of[IO, Node](node)
+        trabica = new Trabica(context, quorumNode.id, quorumPeer, ref, events, supervisor, trace)
+        _ <- node.run.supervise(supervisor)
+        _ <- trabica.run.supervise(supervisor)
+        _ <- networking.server(trabica, quorumPeer.host, quorumPeer.port).useForever
+      } yield ()
+    }
 
 }
