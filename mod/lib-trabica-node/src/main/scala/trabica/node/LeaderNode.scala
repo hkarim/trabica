@@ -31,8 +31,11 @@ class LeaderNode(
   private final val heartbeatStreamRate: Long =
     context.config.getLong("trabica.leader.heartbeat-stream.rate")
 
-  def lens: NodeStateLens[NodeState.Leader] =
+  override def lens: NodeStateLens[NodeState.Leader] =
     NodeStateLens[NodeState.Leader]
+
+  override def run: IO[FiberIO[Unit]] =
+    clients.use(heartbeatStream).supervise(supervisor)
 
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >>
@@ -52,7 +55,7 @@ class LeaderNode(
           .evalMap { _ =>
             for {
               currentState <- state.get
-              h            <- header(currentState)
+              h            <- makeHeader(currentState)
               request = AppendEntriesRequest(
                 header = h.some,
                 prevLogIndex = currentState.commitIndex.value - 1,
@@ -67,7 +70,6 @@ class LeaderNode(
               }
             } yield responses
           }
-
       }
       .handleErrorWith { e =>
         Stream.eval {
@@ -88,38 +90,12 @@ class LeaderNode(
         logger.trace(s"$prefix response `${r.success}` from peer ${peer.host}:${peer.port}")
     }
 
-  def run: IO[FiberIO[Unit]] =
-    clients.use(heartbeatStream).supervise(supervisor)
-
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     for {
       currentState <- state.get
       header       <- request.header.required(NodeError.InvalidMessage)
       _            <- Node.termCheck(header, currentState, events)
     } yield false
-
-  override def vote(request: VoteRequest): IO[Boolean] =
-    for {
-      currentState <- state.get
-      header       <- request.header.required(NodeError.InvalidMessage)
-      _ <- logger.debug(
-        s"$prefix vote requested",
-        s"votedFor=${currentState.localState.votedFor},",
-        s"term=${currentState.localState.currentTerm},",
-        s"request.term=${header.term}"
-      )
-      voteGranted =
-        currentState.localState.votedFor.isEmpty &&
-          header.term > currentState.localState.currentTerm
-      _ <-
-        if voteGranted then {
-          for {
-            qn <- header.node.required(NodeError.InvalidMessage)
-            ls = currentState.localState.copy(votedFor = qn.some)
-            _ <- state.set(currentState.copy(localState = ls))
-          } yield ()
-        } else IO.unit
-    } yield voteGranted
 
 }
 

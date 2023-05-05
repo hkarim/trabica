@@ -107,7 +107,7 @@ class Trabica(
   override def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse] =
     for {
       server  <- ref.get
-      header  <- server.header
+      header  <- server.makeHeader
       success <- server.appendEntries(request)
       response = AppendEntriesResponse(
         header = header.some,
@@ -118,7 +118,7 @@ class Trabica(
   override def vote(request: VoteRequest): IO[VoteResponse] =
     for {
       server      <- ref.get
-      header      <- server.header
+      header      <- server.makeHeader
       voteGranted <- server.vote(request)
       response = VoteResponse(
         header = header.some,

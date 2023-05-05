@@ -63,7 +63,7 @@ trait Node[S <: NodeState] {
   def quorumNode: QuorumNode =
     QuorumNode(id = quorumId, peer = quorumPeer.some)
 
-  def header: IO[Header] =
+  def makeHeader: IO[Header] =
     for {
       messageId    <- context.messageId.getAndUpdate(_.increment)
       currentState <- state.get
@@ -74,7 +74,7 @@ trait Node[S <: NodeState] {
       )
     } yield h
 
-  def header(state: NodeState): IO[Header] =
+  def makeHeader(state: NodeState): IO[Header] =
     for {
       messageId <- context.messageId.getAndUpdate(_.increment)
       h = Header(

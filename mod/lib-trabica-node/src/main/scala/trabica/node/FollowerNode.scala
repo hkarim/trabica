@@ -33,10 +33,10 @@ class FollowerNode(
   private final val heartbeatStreamTimeoutMax: Long =
     context.config.getLong("trabica.follower.heartbeat-stream.timeout.max")
 
-  def lens: NodeStateLens[NodeState.Follower] =
+  override def lens: NodeStateLens[NodeState.Follower] =
     NodeStateLens[NodeState.Follower]
 
-  def run: IO[FiberIO[Unit]] =
+  override def run: IO[FiberIO[Unit]] =
     Stream
       .eval(Random.scalaUtilRandom[IO])
       .evalMap(_.betweenLong(heartbeatStreamTimeoutMin, heartbeatStreamTimeoutMax))
@@ -110,6 +110,7 @@ class FollowerNode(
         votes = Set(qn),
         elected = false,
       )
+      _ <- context.store.writeState(newState.localState)
       - <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.NoHeartbeat))
     } yield ()
 

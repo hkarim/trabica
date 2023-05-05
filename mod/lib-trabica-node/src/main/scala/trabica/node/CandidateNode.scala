@@ -42,8 +42,11 @@ class CandidateNode(
   private final val voteRequestTimeout: Long =
     context.config.getLong("trabica.candidate.vote-request.timeout")
 
-  def lens: NodeStateLens[NodeState.Candidate] =
+  override def lens: NodeStateLens[NodeState.Candidate] =
     NodeStateLens[NodeState.Candidate]
+
+  def run: IO[FiberIO[Unit]] =
+    clients.use(voteStream).supervise(supervisor)
 
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >>
@@ -73,7 +76,7 @@ class CandidateNode(
           .evalMap { _ =>
             for {
               _ <- logger.debug(s"$prefix requesting vote from ${nodes.length} client(s)")
-              h <- header
+              h <- makeHeader
               request = VoteRequest(header = h.some)
               responses <- nodes.parTraverse { n =>
                 n.vote(request)
@@ -129,7 +132,7 @@ class CandidateNode(
               if newlyElected && !currentlyElected then {
                 val newState = NodeState.Leader(
                   localState = LocalState(
-                    node = QuorumNode(id = quorumId, peer = quorumPeer.some).some,
+                    node = quorumNode.some,
                     currentTerm = currentState.votingTerm.value,
                     votedFor = None,
                   ),
@@ -153,9 +156,6 @@ class CandidateNode(
           IO.raiseError(NodeError.InvalidMessage)
     }
 
-  def run: IO[FiberIO[Unit]] =
-    clients.use(voteStream).supervise(supervisor)
-
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     for {
       currentState <- state.get
@@ -174,12 +174,17 @@ class CandidateNode(
             commitIndex = currentState.commitIndex,
             lastApplied = currentState.lastApplied
           )
-          events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.HigherTermDiscovered))
+          for {
+            _ <- context.store.writeState(newState.localState)
+            _ <- events.offer(
+              Event.NodeStateChanged(currentState, newState, StateTransitionReason.HigherTermDiscovered)
+            )
+          } yield ()
         } else Node.termCheck(header, currentState, events)
     } yield false
 
   override def vote(request: VoteRequest): IO[Boolean] =
-    IO.pure(false)
+    IO.pure(false) // a candidate votes only for himself
 }
 
 object CandidateNode {
