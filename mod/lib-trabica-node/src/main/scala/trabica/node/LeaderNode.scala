@@ -87,11 +87,26 @@ class LeaderNode(
       case Left(e) =>
         logger.trace(s"$prefix no response from peer ${peer.host}:${peer.port}, error: ${e.getMessage}")
       case Right(r) =>
-        logger.trace(s"$prefix response `${r.success}` from peer ${peer.host}:${peer.port}")
+        for {
+          _            <- logger.trace(s"$prefix response `${r.success}` from peer ${peer.host}:${peer.port}")
+          currentState <- state.get
+          header       <- r.header.required(NodeError.InvalidMessage)
+          _ <-
+            if header.term > currentState.localState.currentTerm then {
+              val newState = makeFollowerState(currentState, header.term)
+              events.offer(
+                Event.NodeStateChanged(
+                  oldState = currentState,
+                  newState = newState,
+                  reason = StateTransitionReason.HigherTermDiscovered,
+                )
+              )
+            } else IO.unit
+        } yield ()
     }
 
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
-    IO.raiseError(NodeError.InvalidMessage)
+    IO.pure(false)
 
 }
 

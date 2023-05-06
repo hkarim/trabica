@@ -187,19 +187,15 @@ class CandidateNode(
       currentState <- state.get
       header       <- request.header.required(NodeError.InvalidMessage)
       _ <-
-        if currentState.localState.currentTerm == header.term then {
+        if currentState.localState.currentTerm <= header.term then {
           // a leader has been elected other than this candidate, change state to follower
-          val newState = NodeState.Follower(
-            localState = LocalState(
-              node = QuorumNode(id = quorumId, peer = Some(quorumPeer)).some,
-              currentTerm = header.term,
-              votedFor = None,
-            ),
-            commitIndex = currentState.commitIndex,
-            lastApplied = currentState.lastApplied
-          )
+          val newState = makeFollowerState(currentState, header.term)
           events.offer(
-            Event.NodeStateChanged(currentState, newState, StateTransitionReason.HigherTermDiscovered)
+            Event.NodeStateChanged(
+              oldState = currentState,
+              newState = newState,
+              reason = StateTransitionReason.HigherTermDiscovered
+            )
           )
         } else IO.unit
     } yield false

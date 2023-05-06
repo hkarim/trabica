@@ -61,7 +61,9 @@ class Trabica(
         _       <- oldNode.interrupt
         _       <- logger.debug(s"$loggingPrefix starting node transition")
         s       <- newNode.state.get
+        _       <- logger.debug(s"$loggingPrefix writing persistent state to disk")
         _       <- context.store.writeState(s.localState)
+        _       <- logger.debug(s"$loggingPrefix starting")
         spawned <- newNode.run
       } yield spawned
       (newNode, io)
