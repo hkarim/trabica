@@ -20,6 +20,8 @@ trait Node[S <: NodeState] {
 
   def state: Ref[IO, S]
 
+  def events: Queue[IO, Event]
+
   given lens: NodeStateLens[S]
 
   def run: IO[FiberIO[Unit]]
@@ -45,10 +47,16 @@ trait Node[S <: NodeState] {
           case Some(node) =>
             IO.pure(request.header.flatMap(_.node).contains(node))
           case None =>
-            val voteGranted = header.term > currentState.localState.currentTerm
+            val theirTermIsHigher = header.term > currentState.localState.currentTerm
             for {
-              _ <-
-                if voteGranted then {
+              last <- context.store.last
+              lastTerm  = last.map(_.term).getOrElse(0L)
+              lastIndex = last.map(_.index).getOrElse(0L)
+              ourLogIsBetter =
+                lastTerm > request.lastLogTerm ||
+                  (lastTerm == request.lastLogTerm && lastIndex > request.lastLogIndex)
+              voteGranted <-
+                if theirTermIsHigher && !ourLogIsBetter then {
                   for {
                     qn <- header.node.required(NodeError.InvalidMessage)
                     ls = currentState.localState.copy(votedFor = qn.some)
@@ -56,6 +64,7 @@ trait Node[S <: NodeState] {
                     _ <- context.store.writeState(ls)
                   } yield true
                 } else IO.pure(false)
+              _ <- logger.debug(s"$prefix responding with voteGranted: $voteGranted")
             } yield voteGranted
         }
     } yield result
@@ -83,6 +92,17 @@ trait Node[S <: NodeState] {
         term = state.localState.currentTerm,
       )
     } yield h
+
+  def makeFollowerState(currentState: NodeState, term: Long): NodeState.Follower =
+    NodeState.Follower(
+      localState = LocalState(
+        node = QuorumNode(id = quorumId, peer = Some(quorumPeer)).some,
+        currentTerm = term,
+        votedFor = None,
+      ),
+      commitIndex = currentState.commitIndex,
+      lastApplied = currentState.lastApplied
+    )
 
   def quorum: IO[Quorum] =
     for {
@@ -150,9 +170,6 @@ object Node {
       t <- trace.incrementFollower
       n <- FollowerNode.instance(context, quorumId, quorumPeer, r, events, signal, supervisor, t)
     } yield n
-
-  def termCheck(header: Header, currentState: NodeState, events: Queue[IO, Event]): IO[Unit] =
-    ???
 
   def state(command: CliCommand, store: FsmStore): IO[NodeState.Follower] = command match {
     case c: CliCommand.Bootstrap =>

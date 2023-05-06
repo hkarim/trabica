@@ -87,7 +87,8 @@ class FollowerNode(
         logger.debug(s"$prefix canceling timeout, no peers available: ${e.getMessage}") >>
           IO.pure(Vector.empty)
       }
-      _ <- if peers.nonEmpty then timeout else IO.unit
+      currentState <- state.get
+      _            <- if peers.nonEmpty && currentState.localState.votedFor.isEmpty then timeout else IO.unit
     } yield ()
 
   private def timeout: IO[Unit] =
@@ -106,16 +107,14 @@ class FollowerNode(
         ),
         commitIndex = currentState.commitIndex,
         lastApplied = currentState.lastApplied,
-        votingTerm = Term.of(newTerm),
         votes = Set(qn),
         elected = false,
       )
-      _ <- context.store.writeState(newState.localState)
-      - <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.NoHeartbeat))
+      _ <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.NoHeartbeat))
     } yield ()
 
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
-    heartbeat.set(Some(())) >> IO.pure(true)
+    heartbeat.set(Some(())) >> IO.pure(false)
 
 }
 

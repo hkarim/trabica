@@ -60,6 +60,8 @@ class Trabica(
         _       <- logger.debug(s"interrupting current node")
         _       <- oldNode.interrupt
         _       <- logger.debug(s"$loggingPrefix starting node transition")
+        s       <- newNode.state.get
+        _       <- context.store.writeState(s.localState)
         spawned <- newNode.run
       } yield spawned
       (newNode, io)
@@ -104,15 +106,37 @@ class Trabica(
       _ <- startup(n, s, l)
     } yield ()
 
+  
+
   override def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse] =
     for {
-      server  <- ref.get
-      header  <- server.makeHeader
-      success <- server.appendEntries(request)
-      response = AppendEntriesResponse(
-        header = header.some,
-        success = success,
-      )
+      server        <- ref.get
+      currentState  <- server.state.get
+      requestHeader <- request.header.required(NodeError.InvalidMessage)
+      outdated = requestHeader.term > currentState.localState.currentTerm
+      responseHeader <- server.makeHeader
+      response <-
+        if outdated then {
+          val followerState = server.makeFollowerState(currentState, requestHeader.term)
+          val r = AppendEntriesResponse(
+            header = responseHeader.some,
+            success = false,
+          )
+          val event = Event.NodeStateChanged(
+            oldState = currentState,
+            newState = followerState,
+            reason = StateTransitionReason.HigherTermDiscovered,
+          )
+          events.offer(event) >> IO.pure(r)
+        } else {
+          for {
+            success <- server.appendEntries(request)
+            r = AppendEntriesResponse(
+              header = responseHeader.some,
+              success = success,
+            )
+          } yield r
+        }
     } yield response
 
   override def vote(request: VoteRequest): IO[VoteResponse] =

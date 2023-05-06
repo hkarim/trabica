@@ -91,11 +91,7 @@ class LeaderNode(
     }
 
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
-    for {
-      currentState <- state.get
-      header       <- request.header.required(NodeError.InvalidMessage)
-      _            <- Node.termCheck(header, currentState, events)
-    } yield false
+    IO.raiseError(NodeError.InvalidMessage)
 
 }
 

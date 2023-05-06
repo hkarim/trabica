@@ -56,10 +56,13 @@ class CandidateNode(
   private def timeout: IO[Unit] =
     for {
       _ <- logger.debug(s"$prefix vote stream timed out, restarting election")
-      s <- state.updateAndGet(s => s.copy(votingTerm = s.votingTerm.increment))
-      _ <- logger.debug(s"$prefix starting vote stream with term ${s.votingTerm}")
+      newState <- state.updateAndGet { s =>
+        val localState = s.localState.copy(currentTerm = s.localState.currentTerm + 1)
+        s.copy(localState = localState)
+      }
+      _ <- logger.debug(s"$prefix starting vote stream with term ${newState.localState.currentTerm}")
       _ <- events.offer(
-        Event.NodeStateChanged(s, s, StateTransitionReason.ConfigurationChanged)
+        Event.NodeStateChanged(newState, newState, StateTransitionReason.ElectionStarted)
       )
     } yield ()
 
@@ -75,9 +78,14 @@ class CandidateNode(
           .evalTap(_ => logger.debug(s"$prefix vote stream wake up"))
           .evalMap { _ =>
             for {
-              _ <- logger.debug(s"$prefix requesting vote from ${nodes.length} client(s)")
-              h <- makeHeader
-              request = VoteRequest(header = h.some)
+              _     <- logger.debug(s"$prefix requesting vote from ${nodes.length} client(s)")
+              entry <- context.store.last
+              h     <- makeHeader
+              request = VoteRequest(
+                header = h.some,
+                lastLogIndex = entry.map(_.index).getOrElse(0L),
+                lastLogTerm = entry.map(_.term).getOrElse(0L),
+              )
               responses <- nodes.parTraverse { n =>
                 n.vote(request)
                   .timeout(voteRequestTimeout.milliseconds)
@@ -133,7 +141,7 @@ class CandidateNode(
                 val newState = NodeState.Leader(
                   localState = LocalState(
                     node = quorumNode.some,
-                    currentTerm = currentState.votingTerm.value,
+                    currentTerm = currentState.localState.currentTerm,
                     votedFor = None,
                   ),
                   commitIndex = currentState.commitIndex,
@@ -142,15 +150,33 @@ class CandidateNode(
                   matchIndex = Map.empty,
                 )
                 events.offer(
-                  Event.NodeStateChanged(currentState, newState, StateTransitionReason.ElectedLeader)
+                  Event.NodeStateChanged(
+                    currentState,
+                    newState,
+                    StateTransitionReason.ElectedLeader
+                  )
                 )
               } else IO.unit
             (currentState.copy(votes = votes, elected = newlyElected), io)
           }
         } yield ()
-      case Right(VoteResponse(Some(_), false, _)) =>
+      case Right(VoteResponse(Some(header), false, _)) =>
         val peer = client.quorumPeer
-        logger.debug(s"$prefix vote denied from peer ${peer.host}:${peer.port}")
+        for {
+          _            <- logger.debug(s"$prefix vote denied from peer ${peer.host}:${peer.port}")
+          currentState <- state.get
+          _ <-
+            if header.term > currentState.localState.currentTerm then {
+              val followerState = makeFollowerState(currentState, header.term)
+              events.offer(
+                Event.NodeStateChanged(
+                  oldState = currentState,
+                  newState = followerState,
+                  reason = StateTransitionReason.HigherTermDiscovered,
+                )
+              )
+            } else IO.unit
+        } yield ()
       case Right(v) =>
         logger.debug(s"$prefix invalid vote message received: $v") >>
           IO.raiseError(NodeError.InvalidMessage)
@@ -160,10 +186,8 @@ class CandidateNode(
     for {
       currentState <- state.get
       header       <- request.header.required(NodeError.InvalidMessage)
-      node         <- header.node.required(NodeError.InvalidMessage)
-      peer         <- node.peer.required(NodeError.InvalidMessage)
       _ <-
-        if currentState.votingTerm.value == header.term then {
+        if currentState.localState.currentTerm == header.term then {
           // a leader has been elected other than this candidate, change state to follower
           val newState = NodeState.Follower(
             localState = LocalState(
@@ -174,17 +198,12 @@ class CandidateNode(
             commitIndex = currentState.commitIndex,
             lastApplied = currentState.lastApplied
           )
-          for {
-            _ <- context.store.writeState(newState.localState)
-            _ <- events.offer(
-              Event.NodeStateChanged(currentState, newState, StateTransitionReason.HigherTermDiscovered)
-            )
-          } yield ()
-        } else Node.termCheck(header, currentState, events)
+          events.offer(
+            Event.NodeStateChanged(currentState, newState, StateTransitionReason.HigherTermDiscovered)
+          )
+        } else IO.unit
     } yield false
 
-  override def vote(request: VoteRequest): IO[Boolean] =
-    IO.pure(false) // a candidate votes only for himself
 }
 
 object CandidateNode {

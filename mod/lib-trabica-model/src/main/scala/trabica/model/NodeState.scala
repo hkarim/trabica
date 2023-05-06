@@ -36,7 +36,6 @@ object NodeState {
     localState: LocalState,
     commitIndex: Index,
     lastApplied: Index,
-    votingTerm: Term,
     votes: Set[QuorumNode],
     elected: Boolean,
   ) extends NodeState {
