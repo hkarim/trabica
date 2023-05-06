@@ -121,8 +121,6 @@ object FsmFileStore {
     indexStore: IndexFileStore
   ) extends FsmStore {
 
-    private final val logger = scribe.cats[IO]
-
     override def bootstrap: IO[Unit] =
       for {
         _ <- stateStore.bootstrap
@@ -259,22 +257,20 @@ object FsmFileStore {
               )
             else
               write(entry).map(_ => AppendResult.Appended)
-          case (l, Some(e)) =>
+          case (_, Some(e)) =>
             // entry with the same index exists
             // check the term for conflicts
             if e.term != entry.term then {
               // terms are not the same, conflict
-              logger.debug(s"last entry: $l, existing entry $e") >>
-                IO.pure(
-                  AppendResult.IndexExistsWithTermConflict(
-                    storeTerm = Term.of(e.term),
-                    incomingTerm = Term.of(entry.term)
-                  )
+              IO.pure(
+                AppendResult.IndexExistsWithTermConflict(
+                  storeTerm = Term.of(e.term),
+                  incomingTerm = Term.of(entry.term)
                 )
+              )
             } else {
               // terms are the same
-              logger.debug(s"last entry: $l, existing entry $e") >>
-                IO.pure(AppendResult.IndexExists)
+              IO.pure(AppendResult.IndexExists)
             }
         }
       } yield r
