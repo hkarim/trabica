@@ -178,7 +178,8 @@ lazy val `node-template` = project
     )
   )
   .settings(
-    libraryDependencies ++= Lib.decline,
+    libraryDependencies ++=
+      Lib.decline
   )
   .dependsOn(`lib-trabica-node`)
   .dependsOn(`lib-trabica-rpc`)

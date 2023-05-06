@@ -179,7 +179,8 @@ object Node {
     for {
       _ <- store.bootstrap // clear all current store managed files
       data = Quorum(nodes = command.quorumPeers).toByteString
-      _ <- store.append(LogEntry(index = 1L, term = 0L, tag = LogEntryTag.Conf, data = data))
+      c <- store.append(LogEntry(index = 1L, term = 0L, tag = LogEntryTag.Conf, data = data))
+      _ <- logger.debug(s"appended conf entry with result: $c")
       _ <- store.writeState(localState)
       nodeState = NodeState.Follower(
         localState = localState,

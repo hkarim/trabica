@@ -1,9 +1,10 @@
 package trabica.store
 
 import cats.effect.{IO, Resource}
+import cats.syntax.all.*
 import com.google.protobuf.{CodedInputStream, CodedOutputStream}
 import fs2.Stream
-import trabica.model.{Index, LocalState, LogEntry, LogEntryTag}
+import trabica.model.*
 
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -77,8 +78,13 @@ object FsmFileStore {
         writeChannel.write(buffer)
       }.void
 
-    def positionOf(index: Index): IO[Long] =
-      read((index.value - 1) * 8)
+    def positionOf(index: Index): IO[Long] = {
+      val p = (index.value - 1) * 8
+      if p >= 0 then
+        read(p)
+      else
+        IO.raiseError(NodeError.StoreError(s"invalid index position $p"))
+    }
 
     def read(position: Long): IO[Long] =
       IO.blocking {
@@ -114,6 +120,8 @@ object FsmFileStore {
     stateStore: StateFileStore,
     indexStore: IndexFileStore
   ) extends FsmStore {
+
+    private final val logger = scribe.cats[IO]
 
     override def bootstrap: IO[Unit] =
       for {
@@ -162,25 +170,41 @@ object FsmFileStore {
         .positionOf(index)
         .flatMap(read)
 
-    private def read(position: Long): IO[LogEntry] =
-      IO.blocking {
-        // allocate a buffer to read the entry length
-        val lengthBuffer = ByteBuffer.allocate(4) // 32-bits
-        lengthBuffer.mark()
-        // read the length from the channel at the index position
-        readChannel.read(lengthBuffer, position)
-        lengthBuffer.reset()
-        val length = lengthBuffer.getInt
-        // allocate a buffer of capacity `length`
-        val entryBuffer = ByteBuffer.allocate(length)
-        entryBuffer.mark()
-        // read the entry from the channel
-        readChannel.read(entryBuffer, position + 4)
-        entryBuffer.reset()
-        LogEntry.parseFrom(CodedInputStream.newInstance(entryBuffer))
-      }
+    override def contains(index: Index, term: Term): IO[Boolean] = {
+      val io = for {
+        entry <- atIndex(index)
+        valid = entry.term == term.value
+      } yield valid
+      io.handleErrorWith(_ => IO.pure(false))
+    }
 
-    override def append(entry: LogEntry): IO[Unit] =
+    private def read(position: Long): IO[LogEntry] =
+      IO
+        .blocking {
+          // allocate a buffer to read the entry length
+          val lengthBuffer = ByteBuffer.allocate(4) // 32-bits
+          lengthBuffer.mark()
+          // read the length from the channel at the index position
+          readChannel.read(lengthBuffer, position)
+          lengthBuffer.reset()
+          val length = lengthBuffer.getInt
+          // allocate a buffer of capacity `length`
+          val entryBuffer = ByteBuffer.allocate(length)
+          entryBuffer.mark()
+          // read the entry from the channel
+          val consumed = readChannel.read(entryBuffer, position + 4)
+          entryBuffer.reset()
+          val entry = LogEntry.parseFrom(CodedInputStream.newInstance(entryBuffer))
+          (consumed, entry)
+        }
+        .flatMap { (consumed, entry) =>
+          if consumed == 0 || consumed == -1 then
+            IO.raiseError(NodeError.StoreError(s"invalid entry position $position"))
+          else
+            IO.pure(entry)
+        }
+
+    private def write(entry: LogEntry): IO[Unit] =
       IO
         .blocking {
           // compute the serialized entry length
@@ -193,7 +217,6 @@ object FsmFileStore {
           buffer.putInt(length)
           // write the entry into the buffer
           entry.writeTo(CodedOutputStream.newInstance(buffer))
-
           // write the buffer into the channel
           buffer.reset()
           writeChannel.write(buffer)
@@ -201,9 +224,60 @@ object FsmFileStore {
           writeChannel.position - size
         }
         .flatMap { p =>
-          // index the position of thi entry
+          // index the position of this entry
           indexStore.logEntryAppended(p)
         }
+
+    override def append(entry: LogEntry): IO[AppendResult] =
+      for {
+        lastEntry <- last
+        existingEntry <-
+          atIndex(Index.of(entry.index))
+            .map(_.some)
+            .recover(_ => Option.empty[LogEntry])
+        r <- (lastEntry, existingEntry) match {
+          case (None, None) =>
+            // no entries in the log, we can safely append
+            write(entry).map(_ => AppendResult.Appended)
+          case (Some(e), None) =>
+            // last entry exists, but no existing entry with the incoming index
+            // check that the index is strictly monotonic
+            // and the term is the same or of a higher value than the last one
+            if e.index != entry.index + 1 then
+              IO.pure(
+                AppendResult.NonMonotonicIndex(
+                  storeIndex = Index.of(e.index),
+                  incomingIndex = Index.of(entry.index),
+                )
+              )
+            else if e.term > entry.term then
+              IO.pure(
+                AppendResult.HigherTermExists(
+                  storeTerm = Term.of(e.term),
+                  incomingTerm = Term.of(entry.term),
+                )
+              )
+            else
+              write(entry).map(_ => AppendResult.Appended)
+          case (l, Some(e)) =>
+            // entry with the same index exists
+            // check the term for conflicts
+            if e.term != entry.term then {
+              // terms are not the same, conflict
+              logger.debug(s"last entry: $l, existing entry $e") >>
+                IO.pure(
+                  AppendResult.IndexExistsWithTermConflict(
+                    storeTerm = Term.of(e.term),
+                    incomingTerm = Term.of(entry.term)
+                  )
+                )
+            } else {
+              // terms are the same
+              logger.debug(s"last entry: $l, existing entry $e") >>
+                IO.pure(AppendResult.IndexExists)
+            }
+        }
+      } yield r
 
     override def truncate(keepIndex: Index): IO[Unit] =
       indexStore.positionOf(keepIndex.increment).flatMap { position =>
@@ -223,9 +297,10 @@ object FsmFileStore {
     val readWriteOptions = util.EnumSet.of(
       StandardOpenOption.CREATE,
       StandardOpenOption.READ,
-      StandardOpenOption.WRITE)
-    val appendOptions    = util.EnumSet.of(StandardOpenOption.CREATE, StandardOpenOption.APPEND)
-    val readOptions      = util.EnumSet.of(StandardOpenOption.READ)
+      StandardOpenOption.WRITE
+    )
+    val appendOptions = util.EnumSet.of(StandardOpenOption.CREATE, StandardOpenOption.APPEND)
+    val readOptions   = util.EnumSet.of(StandardOpenOption.READ)
 
     val stateChannel = Resource.fromAutoCloseable {
       IO.blocking(Files.createDirectories(rootPath)) >>

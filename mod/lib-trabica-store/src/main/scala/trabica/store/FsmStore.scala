@@ -13,6 +13,7 @@ trait FsmStore {
   def stream: Stream[IO, LogEntry]
   def streamFrom(index: Index): Stream[IO, LogEntry]
   def atIndex(index: Index): IO[LogEntry]
-  def append(entry: LogEntry): IO[Unit]
+  def contains(index: Index, term: Term): IO[Boolean]
+  def append(entry: LogEntry): IO[AppendResult]
   def truncate(keepIndex: Index): IO[Unit]
 }
