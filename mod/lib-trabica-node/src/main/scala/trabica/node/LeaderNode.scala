@@ -42,6 +42,9 @@ class LeaderNode(
       signal.complete(Right(())).void >>
       logger.debug(s"$prefix interrupted")
 
+  override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
+    IO.pure(false)
+
   private def heartbeatStream(clients: Vector[NodeApi]): IO[Unit] =
     Stream(clients)
       .interruptWhen(streamSignal)
@@ -105,8 +108,7 @@ class LeaderNode(
         } yield ()
     }
 
-  override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
-    IO.pure(false)
+
 
 }
 

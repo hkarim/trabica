@@ -5,6 +5,7 @@ import cats.effect.std.*
 import cats.syntax.all.*
 import fs2.*
 import trabica.model.*
+import trabica.store.AppendResult
 
 import scala.concurrent.TimeoutException
 import scala.concurrent.duration.*
@@ -114,7 +115,56 @@ class FollowerNode(
     } yield ()
 
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
-    heartbeat.set(Some(())) >> IO.pure(false)
+    for {
+      _            <- heartbeat.set(Some(()))
+      header       <- request.header.required(NodeError.InvalidMessage)
+      currentState <- state.get
+      termOK = currentState.localState.currentTerm <= header.term
+      logOk <- context.store.contains(Index.of(request.prevLogIndex), Term.of(request.prevLogTerm))
+      results <-
+        if termOK && logOk then {
+          request.entries.toVector.traverse { entry =>
+            context.store.append(entry).flatMap {
+              case AppendResult.IndexExistsWithTermConflict(storeTerm, incomingTerm) =>
+                val message =
+                  logger.debug(
+                    s"$prefix failed to append entry - IndexExistsWithTermConflict",
+                    s"incoming entry $entry",
+                    s"storeTerm: $storeTerm, incomingTerm: $incomingTerm"
+                  ) >> IO.pure(false)
+                for {
+                  _ <- message
+                  _ <- logger.debug(s"$prefix truncating up to and including ${entry.index}")
+                  _ <- context.store.truncate(upToIncluding = Index.of(entry.index))
+                  _ <- logger.debug(s"$prefix appending entry at ${entry.index}")
+                  r <- context.store.append(entry)
+                  _ <- logger.debug(s"$prefix append result $r")
+                } yield r == AppendResult.Appended
+              case AppendResult.HigherTermExists(storeTerm, incomingTerm) =>
+                logger.debug(
+                  s"$prefix failed to append entry - HigherTermExists",
+                  s"incoming entry $entry",
+                  s"storeTerm: $storeTerm, incomingTerm: $incomingTerm"
+                ) >> IO.pure(false)
+              case AppendResult.NonMonotonicIndex(storeIndex, incomingIndex) =>
+                logger.debug(
+                  s"$prefix failed to append entry - NonMonotonicIndex",
+                  s"incoming entry $entry",
+                  s"storeIndex: $storeIndex, incomingIndex: $incomingIndex"
+                ) >> IO.pure(false)
+              case AppendResult.IndexExists =>
+                logger.debug(
+                  s"$prefix appending entry: IndexExists",
+                ) >> IO.pure(true)
+              case AppendResult.Appended =>
+                logger.debug(
+                  s"$prefix appending entry: Appended",
+                ) >> IO.pure(true)
+            }
+          }
+        } else IO.pure(Vector(false))
+      response = results.forall(identity)
+    } yield response
 
 }
 

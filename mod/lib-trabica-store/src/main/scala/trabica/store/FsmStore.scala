@@ -15,5 +15,5 @@ trait FsmStore {
   def atIndex(index: Index): IO[LogEntry]
   def contains(index: Index, term: Term): IO[Boolean]
   def append(entry: LogEntry): IO[AppendResult]
-  def truncate(keepIndex: Index): IO[Unit]
+  def truncate(upToIncluding: Index): IO[Unit]
 }

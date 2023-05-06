@@ -94,9 +94,10 @@ object FsmFileStore {
         buffer.reset().getLong
       }
 
-    def truncate(keepIndex: Index): IO[Unit] =
+    def truncate(upToIncluding: Index): IO[Unit] =
       IO.blocking {
-        val size: Long = if keepIndex == Index.zero then 0 else keepIndex.value * 8
+        val position   = (upToIncluding.value - 1) * 8
+        val size: Long = if position - 8 < 0 then 0 else position - 8
         writeChannel.truncate(size)
       }.void
 
@@ -275,13 +276,21 @@ object FsmFileStore {
         }
       } yield r
 
-    override def truncate(keepIndex: Index): IO[Unit] =
-      indexStore.positionOf(keepIndex.increment).flatMap { position =>
+    override def truncate(upToIncluding: Index): IO[Unit] =
+      if upToIncluding == Index.zero || upToIncluding == Index.one then {
         for {
-          _ <- IO.blocking(writeChannel.truncate(position))
-          _ <- indexStore.truncate(keepIndex)
+          _ <- IO.blocking(writeChannel.truncate(0L))
+          _ <- indexStore.truncate(upToIncluding)
         } yield ()
+      } else {
+        indexStore.positionOf(Index.of(upToIncluding.value - 1)).flatMap { position =>
+          for {
+            _ <- IO.blocking(writeChannel.truncate(position))
+            _ <- indexStore.truncate(upToIncluding)
+          } yield ()
+        }
       }
+
   }
 
   def resource(dataDirectory: String): Resource[IO, FsmStore] = {
