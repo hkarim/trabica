@@ -35,7 +35,13 @@ class LeaderNode(
     NodeStateLens[NodeState.Leader]
 
   override def run: IO[FiberIO[Unit]] =
-    clients.use(heartbeatStream).supervise(supervisor)
+    for {
+      _ <- clients.use(heartbeatStream).supervise(supervisor)
+      rp <- clients.use { cs =>
+        cs.traverse(replicationStream)
+      }.void.supervise(supervisor)
+    } yield rp
+
 
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >>
@@ -85,6 +91,48 @@ class LeaderNode(
       .compile
       .drain
 
+  private def replicationStream(client: NodeApi): IO[Unit] =
+    Stream(clients)
+      .interruptWhen(streamSignal)
+      .evalTap(_ => logger.debug(s"$prefix starting replication stream of peer ${client.quorumPeer}"))
+      .flatMap { _ =>
+        context.store
+          .stream
+          .evalTap(e => logger.debug(s"$prefix preparing entry for replication: $e"))
+          .zipWithPrevious
+          .evalMap { (prev, next) =>
+            val io = for {
+              _ <- logger.debug(s"$prefix replicating entry $next")
+              currentState  <- state.get
+              requestHeader <- makeHeader(currentState)
+              request = AppendEntriesRequest(
+                header = requestHeader.some,
+                prevLogIndex = prev.map(_.index).getOrElse(0L),
+                prevLogTerm = prev.map(_.term).getOrElse(0L),
+                commitIndex = currentState.commitIndex.value,
+                entries = Vector(next),
+              )
+              response <- client.appendEntries(request)
+            } yield response
+            io.timeout(100.milliseconds)
+              .attempt
+              .flatMap(r => onResponse(client.quorumPeer, r))
+          }
+      }
+      .handleErrorWith { e =>
+        Stream.eval {
+          logger.error(
+            s"$prefix error encountered in replication stream of peer ${client.quorumPeer}: ${e.getMessage}",
+            e,
+          )
+        }
+      }
+      .onFinalize {
+        logger.debug(s"$prefix replication stream of peer ${client.quorumPeer} finalized")
+      }
+      .compile
+      .drain
+
   private def onResponse(peer: Peer, response: Either[Throwable, AppendEntriesResponse]): IO[Unit] =
     response match {
       case Left(e) =>
@@ -107,8 +155,6 @@ class LeaderNode(
             } else IO.unit
         } yield ()
     }
-
-
 
 }
 

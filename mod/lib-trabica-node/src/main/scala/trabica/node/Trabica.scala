@@ -108,8 +108,6 @@ class Trabica(
       _ <- startup(n, s, l)
     } yield ()
 
-  
-
   override def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse] =
     for {
       server        <- ref.get
@@ -118,7 +116,7 @@ class Trabica(
       outdated = requestHeader.term > currentState.localState.currentTerm
       responseHeader <- server.makeHeader
       response <-
-        if outdated then {
+        if outdated && currentState.tag != NodeStateTag.Follower then {
           val followerState = server.makeFollowerState(currentState, requestHeader.term)
           val r = AppendEntriesResponse(
             header = responseHeader.some,

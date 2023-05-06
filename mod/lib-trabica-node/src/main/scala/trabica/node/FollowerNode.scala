@@ -89,7 +89,9 @@ class FollowerNode(
           IO.pure(Vector.empty)
       }
       currentState <- state.get
-      _            <- if peers.nonEmpty && currentState.localState.votedFor.isEmpty then timeout else IO.unit
+      _            <- logger.debug(s"$prefix current peers: $peers")
+      // _            <- if peers.nonEmpty && currentState.localState.votedFor.isEmpty then timeout else IO.unit
+      _ <- if peers.nonEmpty then timeout else IO.unit
     } yield ()
 
   private def timeout: IO[Unit] =
@@ -119,10 +121,11 @@ class FollowerNode(
       _            <- heartbeat.set(Some(()))
       header       <- request.header.required(NodeError.InvalidMessage)
       currentState <- state.get
-      termOK = currentState.localState.currentTerm <= header.term
+      termOK     = currentState.localState.currentTerm <= header.term
+      firstEntry = (request.prevLogIndex == 0) && (request.prevLogTerm == 0)
       logOk <- context.store.contains(Index.of(request.prevLogIndex), Term.of(request.prevLogTerm))
       results <-
-        if termOK && logOk then {
+        if termOK && (firstEntry || logOk) then {
           request.entries.toVector.traverse { entry =>
             context.store.append(entry).flatMap {
               case AppendResult.IndexExistsWithTermConflict(storeTerm, incomingTerm) =>
