@@ -38,7 +38,7 @@ class LeaderNode(
   override def run: IO[FiberIO[Unit]] =
     for {
       h <- clients.use(heartbeatStream).supervise(supervisor)
-      _ <- replicate.supervise(supervisor)
+      _ <- clients.use(replicate).supervise(supervisor)
     } yield h
 
   override def interrupt: IO[Unit] =
@@ -69,7 +69,7 @@ class LeaderNode(
                 prevLogTerm = currentState.localState.currentTerm - 1,
               )
               responses <- cs.parTraverse { c =>
-                logger.trace(s"$prefix sending heartbeat to ${c.quorumPeer.host}:${c.quorumPeer.port}") >>
+                logger.trace(s"$prefix sending heartbeat to ${c.show}") >>
                   c.appendEntries(request)
                     .timeout(100.milliseconds)
                     .attempt
@@ -89,78 +89,94 @@ class LeaderNode(
       .compile
       .drain
 
-  private def replicate: IO[Unit] =
-    Stream
-      .resource(clients)
+  private def replicate(clients: Vector[NodeApi]): IO[Unit] =
+    Stream(clients)
       .map(Chunk.vector)
       .unchunks
-      .evalTap { c =>
-        for {
-          initialState <- state.get
-          _ <- initialState.matchIndex.get(c.quorumPeer) match {
-            case Some(_) =>
-              IO.unit
-            case None =>
-              state.set(
-                initialState.copy(matchIndex = initialState.matchIndex + (c.quorumPeer -> Index.zero))
-              )
-          }
-        } yield ()
-      }
-      .flatMap(replicationStream)
+      .parEvalMapUnorderedUnbounded(replicationStream)
       .compile
       .drain
 
-  private def replicationStream(client: NodeApi): Stream[IO, Unit] =
+  private def sendAppendEntriesRequest(
+    client: NodeApi,
+    currentState: NodeState.Leader,
+    previousLogEntry: Option[LogEntry],
+    nextLogEntry: LogEntry,
+  ): IO[Unit] = {
+    val io = for {
+      requestHeader <- makeHeader(currentState)
+      request = AppendEntriesRequest(
+        header = requestHeader.some,
+        prevLogIndex = previousLogEntry.map(_.index).getOrElse(0L),
+        prevLogTerm = previousLogEntry.map(_.term).getOrElse(0L),
+        commitIndex = currentState.commitIndex.value,
+        entries = Vector(nextLogEntry),
+      )
+      response <- client.appendEntries(request)
+    } yield response
+    io.timeout(100.milliseconds)
+      .attempt
+      .flatMap { response =>
+        onAppendEntriesResponse(
+          client.quorumPeer,
+          Index.of(nextLogEntry.index).some,
+          response
+        )
+      }
+  }
+
+  private def replicationStream(client: NodeApi): IO[Unit] =
     Stream
       .fixedRateStartImmediately[IO](2000.milliseconds)
       .interruptWhen(streamSignal)
-      .evalTap(_ => logger.debug(s"$prefix replicating to peer: ${client.quorumPeer.port}"))
-      .evalMap(_ => state.get.map(_.matchIndex.get(client.quorumPeer)))
-      .flatMap { indexOption =>
+      .evalTap(_ => logger.trace(s"$prefix starting replication to peer ${client.show}"))
+      .evalMap { _ =>
+        for {
+          currentState <- state.get
+          lastIndexOption = currentState.matchIndex.get(client.quorumPeer)
+        } yield (currentState, lastIndexOption)
+      }
+      .flatMap { (currentState, lastIndexOption) =>
         context.store
-          .streamFrom(indexOption.getOrElse(Index.one))
+          .streamFrom(lastIndexOption.getOrElse(Index.zero).increment)
           .interruptWhen(streamSignal)
-          .evalTap(e => logger.debug(s"$prefix replicating , index:${e.index} -> ${client.quorumPeer.port}"))
+          .evalTap { e =>
+            logger.debug(
+              s"$prefix replicating index:${e.index} -> ${client.show}",
+              s"$prefix matchIndex: ${currentState.matchIndex}",
+              s"$prefix commitIndex: ${currentState.commitIndex}",
+            )
+          }
           .zipWithPrevious
           .evalMap { (prev, next) =>
-            val io = for {
-              currentState  <- state.get
-              requestHeader <- makeHeader(currentState)
-              request = AppendEntriesRequest(
-                header = requestHeader.some,
-                prevLogIndex = prev.map(_.index).getOrElse(0L),
-                prevLogTerm = prev.map(_.term).getOrElse(0L),
-                commitIndex = currentState.commitIndex.value,
-                entries = Vector(next),
-              )
-              _        <- logger.debug(s"$prefix sending request $request")
-              response <- client.appendEntries(request)
-            } yield response
-            io.timeout(100.milliseconds)
-              .attempt
-              .flatMap(r => onAppendEntriesResponse(client.quorumPeer, Index.of(next.index).some, r))
+            sendAppendEntriesRequest(client, currentState, prev, next)
           }
       }
       .handleErrorWith { e =>
         Stream.eval {
           logger.error(
-            s"$prefix error encountered in replication stream of peer ${client.quorumPeer}: ${e.getMessage}",
+            s"$prefix error encountered in replication stream: ${e.getMessage}",
             e,
           )
         }
       }
       .onFinalize {
-        logger.debug(s"$prefix replication stream of peer ${client.quorumPeer} finalized")
+        logger.trace(s"$prefix replication stream finalized")
       }
+      .compile
+      .drain
 
-  private def onAppendEntriesResponse(peer: Peer, index: Option[Index], response: Either[Throwable, AppendEntriesResponse]): IO[Unit] =
+  private def onAppendEntriesResponse(
+    peer: Peer,
+    index: Option[Index],
+    response: Either[Throwable, AppendEntriesResponse]
+  ): IO[Unit] =
     response match {
       case Left(e) =>
-        logger.debug(s"$prefix no response from peer ${peer.host}:${peer.port}, error: ${e.getMessage}")
+        logger.trace(s"$prefix no response from peer ${peer.show}, error: ${e.getMessage}")
       case Right(r) if !r.success =>
         for {
-          _            <- logger.trace(s"$prefix response `${r.success}` from peer ${peer.host}:${peer.port}")
+          _            <- logger.trace(s"$prefix response `${r.success}` from peer ${peer.show}")
           currentState <- state.get
           header       <- r.header.required(NodeError.InvalidMessage)
           _ <-
@@ -179,7 +195,7 @@ class LeaderNode(
       case Right(_) =>
         index match {
           case Some(value) =>
-            logger.debug(s"$prefix entry reported to be appended, index $value") >>
+            logger.debug(s"$prefix append entry success at index $value") >>
               onEntryAppended(peer, value)
           case None =>
             IO.unit

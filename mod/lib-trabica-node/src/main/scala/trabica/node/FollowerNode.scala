@@ -125,7 +125,16 @@ class FollowerNode(
       firstEntry = (request.prevLogIndex == 0) && (request.prevLogTerm == 0)
       logOk <- context.store.contains(Index.of(request.prevLogIndex), Term.of(request.prevLogTerm))
       check = termOK && (firstEntry || logOk)
-      _     <- logger.debug(s"$prefix - size: ${request.entries.size} - check: $check - termOk: $termOK, firstEntry: $firstEntry, logOk: $logOk")
+      _ <-
+        if request.entries.nonEmpty then
+          logger.debug(
+            s"$prefix - size: ${request.entries.size}",
+            s"check: $check",
+            s"termOk: $termOK",
+            s"firstEntry: $firstEntry",
+            s"logOk: $logOk"
+          )
+        else IO.unit
       results <-
         if check then {
           request.entries.toVector.traverse { entry =>
@@ -136,7 +145,7 @@ class FollowerNode(
                     s"$prefix failed to append entry - IndexExistsWithTermConflict",
                     s"incoming entry $entry",
                     s"storeTerm: $storeTerm, incomingTerm: $incomingTerm"
-                  ) >> IO.pure(false)
+                  )
                 for {
                   _ <- message
                   _ <- logger.debug(s"$prefix truncating up to and including ${entry.index}")
@@ -144,6 +153,10 @@ class FollowerNode(
                   _ <- logger.debug(s"$prefix appending entry at ${entry.index}")
                   r <- context.store.append(entry)
                   _ <- logger.debug(s"$prefix append result $r")
+                  _ <-
+                    if r == AppendResult.Appended then
+                      updateCommitIndex(request.commitIndex, entry.index)
+                    else IO.unit
                 } yield r == AppendResult.Appended
               case AppendResult.HigherTermExists(storeTerm, incomingTerm) =>
                 logger.debug(
@@ -162,14 +175,23 @@ class FollowerNode(
                   s"$prefix appending entry: IndexExists",
                 ) >> IO.pure(true)
               case AppendResult.Appended =>
-                logger.debug(
-                  s"$prefix appending entry: Appended",
-                ) >> IO.pure(true)
+                for {
+                  _ <- logger.debug(s"$prefix appending entry: Appended")
+                  _ <- updateCommitIndex(request.commitIndex, entry.index)
+                } yield true
             }
           }
         } else IO.pure(Vector(false))
       response = results.forall(identity)
     } yield response
+
+  private def updateCommitIndex(leaderCommitIndex: Long, lastIndex: Long): IO[Unit] =
+    state.update { currentState =>
+      if leaderCommitIndex > currentState.commitIndex.value then
+        currentState.copy(commitIndex = Index.of(math.min(leaderCommitIndex, lastIndex)))
+      else
+        currentState
+    }
 
 }
 

@@ -1,8 +1,10 @@
 package trabica.node
 
+import cats.Show
 import cats.effect.*
 import com.google.protobuf.CodedInputStream
 import trabica.model.*
+import trabica.net.NodeApi
 
 type Interrupt = Deferred[IO, Either[Throwable, Unit]]
 
@@ -30,9 +32,19 @@ extension [A](self: Option[A]) {
   }
 }
 
-extension[S <: NodeState] (self: S) {
+extension [S <: NodeState](self: S) {
   def updated(localState: LocalState)(using lens: NodeStateLens[S]): S =
     lens.updated(self, localState)
+}
+
+given Show[NodeApi] with {
+  override def show(instance: NodeApi): String =
+    s"${instance.quorumPeer.host}:${instance.quorumPeer.port}"
+}
+
+given Show[Peer] with {
+  override def show(instance: Peer): String =
+    s"${instance.host}:${instance.port}"
 }
 
 case class NodeTrace(

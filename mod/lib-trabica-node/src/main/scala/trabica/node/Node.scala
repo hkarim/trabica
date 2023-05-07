@@ -101,7 +101,7 @@ trait Node[S <: NodeState] {
         votedFor = None,
       ),
       commitIndex = currentState.commitIndex,
-      lastApplied = currentState.lastApplied
+      lastApplied = currentState.lastApplied,
     )
 
   def quorum: IO[Quorum] =
