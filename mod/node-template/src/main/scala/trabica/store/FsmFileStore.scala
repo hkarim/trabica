@@ -104,14 +104,16 @@ object FsmFileStore {
     def stream: Stream[IO, Long] =
       streamFrom(0L)
 
-    def streamFrom(position: Long): Stream[IO, Long] =
+    def streamFrom(position: Long): Stream[IO, Long] = {
+      val first = if position < 0 then 0 else position
       Stream
         .eval(size)
         .flatMap { n =>
           Stream
-            .range(position, n, 8L)
+            .range(first, n, 8L)
             .evalMap(read)
         }
+    }
 
   }
 

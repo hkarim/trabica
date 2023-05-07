@@ -124,8 +124,10 @@ class FollowerNode(
       termOK     = currentState.localState.currentTerm <= header.term
       firstEntry = (request.prevLogIndex == 0) && (request.prevLogTerm == 0)
       logOk <- context.store.contains(Index.of(request.prevLogIndex), Term.of(request.prevLogTerm))
+      check = termOK && (firstEntry || logOk)
+      _     <- logger.debug(s"$prefix - size: ${request.entries.size} - check: $check - termOk: $termOK, firstEntry: $firstEntry, logOk: $logOk")
       results <-
-        if termOK && (firstEntry || logOk) then {
+        if check then {
           request.entries.toVector.traverse { entry =>
             context.store.append(entry).flatMap {
               case AppendResult.IndexExistsWithTermConflict(storeTerm, incomingTerm) =>

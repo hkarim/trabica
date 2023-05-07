@@ -18,6 +18,7 @@ class LeaderNode(
   val events: Queue[IO, Event],
   val signal: Interrupt,
   val streamSignal: SignallingRef[IO, Boolean],
+  val replicatedEntries: Ref[IO, Map[Index, Int]],
   val supervisor: Supervisor[IO],
   val trace: NodeTrace,
 ) extends Node[NodeState.Leader] {
@@ -36,12 +37,9 @@ class LeaderNode(
 
   override def run: IO[FiberIO[Unit]] =
     for {
-      _ <- clients.use(heartbeatStream).supervise(supervisor)
-      rp <- clients.use { cs =>
-        cs.traverse(replicationStream)
-      }.void.supervise(supervisor)
-    } yield rp
-
+      h <- clients.use(heartbeatStream).supervise(supervisor)
+      _ <- replicate.supervise(supervisor)
+    } yield h
 
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >>
@@ -51,7 +49,7 @@ class LeaderNode(
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     IO.pure(false)
 
-  private def heartbeatStream(clients: Vector[NodeApi]): IO[Unit] =
+  def heartbeatStream(clients: Vector[NodeApi]): IO[Unit] =
     Stream(clients)
       .interruptWhen(streamSignal)
       .filter(_.nonEmpty)
@@ -75,7 +73,7 @@ class LeaderNode(
                   c.appendEntries(request)
                     .timeout(100.milliseconds)
                     .attempt
-                    .flatMap(r => onResponse(c.quorumPeer, r))
+                    .flatMap(r => onAppendEntriesResponse(c.quorumPeer, None, r))
               }
             } yield responses
           }
@@ -91,18 +89,42 @@ class LeaderNode(
       .compile
       .drain
 
-  private def replicationStream(client: NodeApi): IO[Unit] =
-    Stream(clients)
+  private def replicate: IO[Unit] =
+    Stream
+      .resource(clients)
+      .map(Chunk.vector)
+      .unchunks
+      .evalTap { c =>
+        for {
+          initialState <- state.get
+          _ <- initialState.matchIndex.get(c.quorumPeer) match {
+            case Some(_) =>
+              IO.unit
+            case None =>
+              state.set(
+                initialState.copy(matchIndex = initialState.matchIndex + (c.quorumPeer -> Index.zero))
+              )
+          }
+        } yield ()
+      }
+      .flatMap(replicationStream)
+      .compile
+      .drain
+
+  private def replicationStream(client: NodeApi): Stream[IO, Unit] =
+    Stream
+      .fixedRateStartImmediately[IO](2000.milliseconds)
       .interruptWhen(streamSignal)
-      .evalTap(_ => logger.debug(s"$prefix starting replication stream of peer ${client.quorumPeer}"))
-      .flatMap { _ =>
+      .evalTap(_ => logger.debug(s"$prefix replicating to peer: ${client.quorumPeer.port}"))
+      .evalMap(_ => state.get.map(_.matchIndex.get(client.quorumPeer)))
+      .flatMap { indexOption =>
         context.store
-          .stream
-          .evalTap(e => logger.debug(s"$prefix preparing entry for replication: $e"))
+          .streamFrom(indexOption.getOrElse(Index.one))
+          .interruptWhen(streamSignal)
+          .evalTap(e => logger.debug(s"$prefix replicating , index:${e.index} -> ${client.quorumPeer.port}"))
           .zipWithPrevious
           .evalMap { (prev, next) =>
             val io = for {
-              _ <- logger.debug(s"$prefix replicating entry $next")
               currentState  <- state.get
               requestHeader <- makeHeader(currentState)
               request = AppendEntriesRequest(
@@ -112,11 +134,12 @@ class LeaderNode(
                 commitIndex = currentState.commitIndex.value,
                 entries = Vector(next),
               )
+              _        <- logger.debug(s"$prefix sending request $request")
               response <- client.appendEntries(request)
             } yield response
             io.timeout(100.milliseconds)
               .attempt
-              .flatMap(r => onResponse(client.quorumPeer, r))
+              .flatMap(r => onAppendEntriesResponse(client.quorumPeer, Index.of(next.index).some, r))
           }
       }
       .handleErrorWith { e =>
@@ -130,14 +153,12 @@ class LeaderNode(
       .onFinalize {
         logger.debug(s"$prefix replication stream of peer ${client.quorumPeer} finalized")
       }
-      .compile
-      .drain
 
-  private def onResponse(peer: Peer, response: Either[Throwable, AppendEntriesResponse]): IO[Unit] =
+  private def onAppendEntriesResponse(peer: Peer, index: Option[Index], response: Either[Throwable, AppendEntriesResponse]): IO[Unit] =
     response match {
       case Left(e) =>
-        logger.trace(s"$prefix no response from peer ${peer.host}:${peer.port}, error: ${e.getMessage}")
-      case Right(r) =>
+        logger.debug(s"$prefix no response from peer ${peer.host}:${peer.port}, error: ${e.getMessage}")
+      case Right(r) if !r.success =>
         for {
           _            <- logger.trace(s"$prefix response `${r.success}` from peer ${peer.host}:${peer.port}")
           currentState <- state.get
@@ -154,7 +175,42 @@ class LeaderNode(
               )
             } else IO.unit
         } yield ()
+
+      case Right(_) =>
+        index match {
+          case Some(value) =>
+            logger.debug(s"$prefix entry reported to be appended, index $value") >>
+              onEntryAppended(peer, value)
+          case None =>
+            IO.unit
+        }
     }
+
+  private def onEntryAppended(peer: Peer, index: Index): IO[Unit] =
+    for {
+      peers <- quorumPeers
+      majority = math.ceil(peers.length / 2) + 1
+      re <- replicatedEntries.updateAndGet { re =>
+        val count = re.get(index).map(_ + 1).getOrElse(1)
+        re.updated(index, count)
+      }
+      _ <- state.update { s =>
+        val matchIndex = s.matchIndex.updated(peer, index)
+        val commitIndex =
+          re.toVector.sortBy(_._1.value).foldLeft(s.commitIndex) { (acc, next) =>
+            val (index, count) = next
+            if count >= majority && index == acc.increment then
+              acc.increment
+            else acc
+          }
+        s.copy(matchIndex = matchIndex, commitIndex = commitIndex)
+      }
+      _ <- replicatedEntries.update { m =>
+        if m.get(index) == peers.length.some then
+          m.removed(index)
+        else m
+      }
+    } yield ()
 
 }
 
@@ -169,7 +225,8 @@ object LeaderNode {
     supervisor: Supervisor[IO],
     trace: NodeTrace,
   ): IO[LeaderNode] = for {
-    streamSignal <- SignallingRef.of[IO, Boolean](false)
+    streamSignal      <- SignallingRef.of[IO, Boolean](false)
+    replicatedEntries <- Ref.of[IO, Map[Index, Int]](Map.empty)
     node = new LeaderNode(
       context,
       quorumId,
@@ -178,6 +235,7 @@ object LeaderNode {
       events,
       signal,
       streamSignal,
+      replicatedEntries,
       supervisor,
       trace,
     )
