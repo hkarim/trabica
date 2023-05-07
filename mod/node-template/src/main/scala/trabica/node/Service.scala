@@ -39,7 +39,13 @@ object Service
         FsmFileStore.resource(command.dataDirectory).use { store =>
           for {
             _ <- feed(store).supervise(supervisor)
-            _ <- Trabica.run(supervisor, command, store, Grpc)
+            _ <- Trabica.run(supervisor, command, store, Grpc).guarantee {
+              store
+                .stream
+                .evalTap(IO.println)
+                .compile
+                .drain
+            }
           } yield ExitCode.Success
         }
       }
