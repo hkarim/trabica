@@ -164,35 +164,33 @@ object Trabica {
       .replace()
   }.void
 
-  def run(command: CliCommand, store: FsmStore, networking: Networking): IO[Unit] =
-    Supervisor[IO](await = false).use { supervisor =>
-      for {
-        config    <- IO.blocking(ConfigFactory.load())
-        _         <- logging(scribe.Level(config.getString("trabica.log.level")))
-        messageId <- Ref.of[IO, MessageId](MessageId.zero)
-        state     <- Node.state(command, store)
-        quorumNode <- state.localState.node.required(
-          NodeError.StoreError("`localState.node` configuration not found in local state")
-        )
-        quorumPeer <- quorumNode.peer.required(
-          NodeError.StoreError("`localState.node.peer` configuration not found in local state")
-        )
-        context = NodeContext(
-          config = config,
-          messageId = messageId,
-          store = store,
-          networking = networking,
-        )
-        events <- Queue.unbounded[IO, Event]
-        trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
-        node   <- Node.instance(context, quorumNode.id, quorumPeer, events, supervisor, trace, state)
-        ref    <- Ref.of[IO, Node[_ <: NodeState]](node)
-        trabica = new Trabica(context, quorumNode.id, quorumPeer, ref, events, supervisor, trace)
-        _ <- node.run.supervise(supervisor)
-        _ <- logger.info(s"starting up in mode follower")
-        _ <- trabica.run.supervise(supervisor)
-        _ <- networking.server(trabica, quorumPeer.host, quorumPeer.port).useForever
-      } yield ()
-    }
+  def run(supervisor: Supervisor[IO], command: CliCommand, store: FsmStore, networking: Networking): IO[Unit] =
+    for {
+      config    <- IO.blocking(ConfigFactory.load())
+      _         <- logging(scribe.Level(config.getString("trabica.log.level")))
+      messageId <- Ref.of[IO, MessageId](MessageId.zero)
+      state     <- Node.state(command, store)
+      quorumNode <- state.localState.node.required(
+        NodeError.StoreError("`localState.node` configuration not found in local state")
+      )
+      quorumPeer <- quorumNode.peer.required(
+        NodeError.StoreError("`localState.node.peer` configuration not found in local state")
+      )
+      context = NodeContext(
+        config = config,
+        messageId = messageId,
+        store = store,
+        networking = networking,
+      )
+      events <- Queue.unbounded[IO, Event]
+      trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
+      node   <- Node.instance(context, quorumNode.id, quorumPeer, events, supervisor, trace, state)
+      ref    <- Ref.of[IO, Node[_ <: NodeState]](node)
+      trabica = new Trabica(context, quorumNode.id, quorumPeer, ref, events, supervisor, trace)
+      _ <- node.run.supervise(supervisor)
+      _ <- logger.info(s"starting up in mode follower")
+      _ <- trabica.run.supervise(supervisor)
+      _ <- networking.server(trabica, quorumPeer.host, quorumPeer.port).useForever
+    } yield ()
 
 }

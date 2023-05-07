@@ -3,6 +3,7 @@ package trabica.node
 import cats.effect.*
 import cats.effect.std.*
 import cats.syntax.all.*
+import com.google.protobuf.ByteString
 import fs2.*
 import fs2.concurrent.SignallingRef
 import trabica.model.*
@@ -100,15 +101,16 @@ class LeaderNode(
   private def sendAppendEntriesRequest(
     client: NodeApi,
     currentState: NodeState.Leader,
-    previousLogEntry: Option[LogEntry],
+    prevLogIndex: Long,
+    prevLogTerm: Long,
     nextLogEntry: LogEntry,
   ): IO[Unit] = {
     val io = for {
       requestHeader <- makeHeader(currentState)
       request = AppendEntriesRequest(
         header = requestHeader.some,
-        prevLogIndex = previousLogEntry.map(_.index).getOrElse(0L),
-        prevLogTerm = previousLogEntry.map(_.term).getOrElse(0L),
+        prevLogIndex = prevLogIndex,
+        prevLogTerm = prevLogTerm,
         commitIndex = currentState.commitIndex.value,
         entries = Vector(nextLogEntry),
       )
@@ -147,9 +149,14 @@ class LeaderNode(
               s"$prefix commitIndex: ${currentState.commitIndex}",
             )
           }
-          .zipWithPrevious
-          .evalMap { (prev, next) =>
-            sendAppendEntriesRequest(client, currentState, prev, next)
+          .evalMap { next =>
+            for {
+              prev <-
+                context.store
+                  .atIndex(Index.of(next.index - 1))
+                  .recover(_ => LogEntry(0L, 0L, LogEntryTag.Data, ByteString.EMPTY))
+              _ <- sendAppendEntriesRequest(client, currentState, prev.index, prev.term, next)
+            } yield ()
           }
       }
       .handleErrorWith { e =>

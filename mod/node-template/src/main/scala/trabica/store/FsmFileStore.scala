@@ -87,12 +87,20 @@ object FsmFileStore {
     }
 
     def read(position: Long): IO[Long] =
-      IO.blocking {
-        val buffer = ByteBuffer.allocate(8)
-        buffer.mark()
-        readChannel.read(buffer, position)
-        buffer.reset().getLong
-      }
+      IO
+        .blocking {
+          val buffer = ByteBuffer.allocate(8)
+          buffer.mark()
+          val consumed = readChannel.read(buffer, position)
+          val result   = buffer.reset().getLong
+          (consumed, result)
+        }
+        .flatMap { (consumed, result) =>
+          if consumed == 0 || consumed == -1 then
+            IO.raiseError(NodeError.StoreError(s"invalid entry position $position"))
+          else
+            IO.pure(result)
+        }
 
     def truncate(upToIncluding: Index): IO[Unit] =
       IO.blocking {
@@ -244,7 +252,7 @@ object FsmFileStore {
             // last entry exists, but no existing entry with the incoming index
             // check that the index is strictly monotonic
             // and the term is the same or of a higher value than the last one
-            if e.index != entry.index + 1 then
+            if e.index + 1 != entry.index then
               IO.pure(
                 AppendResult.NonMonotonicIndex(
                   storeIndex = Index.of(e.index),
