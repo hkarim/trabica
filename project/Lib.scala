@@ -2,12 +2,12 @@ import sbt.*
 
 object Lib {
   object Version {
-    val scala         = "3.3.0-RC4"
+    val scala         = "3.3.0-RC5"
     val service       = "0.1.0-SNAPSHOT"
     val config        = "1.4.2"
-    val catsEffect    = "3.5.0-RC3"
+    val catsEffect    = "3.5.0-RC5"
     val circe         = "0.14.5"
-    val fs2           = "3.7.0-RC4"
+    val fs2           = "3.7.0-RC5"
     val decline       = "2.4.1"
     val scribe        = "3.11.1"
     val protocVersion = "3.22.0"
