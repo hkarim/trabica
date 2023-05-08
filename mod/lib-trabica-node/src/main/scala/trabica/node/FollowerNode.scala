@@ -12,13 +12,9 @@ import scala.concurrent.duration.*
 
 class FollowerNode(
   val context: NodeContext,
-  val quorumId: String,
-  val quorumPeer: Peer,
   val state: Ref[IO, NodeState.Follower],
-  val events: Queue[IO, Event],
   val signal: Interrupt,
   val heartbeat: Ref[IO, Option[Unit]],
-  val supervisor: Supervisor[IO],
   val trace: NodeTrace,
 ) extends Node[NodeState.Follower] {
 
@@ -44,7 +40,7 @@ class FollowerNode(
       .flatMap(heartbeatStream)
       .compile
       .drain
-      .supervise(supervisor)
+      .supervise(context.supervisor)
 
   override def interrupt: IO[Unit] =
     signal.complete(Right(())).void >>
@@ -113,7 +109,13 @@ class FollowerNode(
         votes = Set(qn),
         elected = false,
       )
-      _ <- events.offer(Event.NodeStateChanged(currentState, newState, StateTransitionReason.NoHeartbeat))
+      _ <- context.events.offer(
+        Event.NodeStateChanged(
+          oldState = currentState,
+          newState = newState,
+          reason = StateTransitionReason.NoHeartbeat
+        )
+      )
     } yield ()
 
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
@@ -198,24 +200,16 @@ class FollowerNode(
 object FollowerNode {
   def instance(
     context: NodeContext,
-    quorumId: String,
-    quorumPeer: Peer,
     state: Ref[IO, NodeState.Follower],
-    events: Queue[IO, Event],
     signal: Interrupt,
-    supervisor: Supervisor[IO],
     trace: NodeTrace,
   ): IO[FollowerNode] = for {
     heartbeat <- Ref.of[IO, Option[Unit]](None)
     node = new FollowerNode(
       context,
-      quorumId,
-      quorumPeer,
       state,
-      events,
       signal,
       heartbeat,
-      supervisor,
       trace,
     )
   } yield node

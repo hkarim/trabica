@@ -6,9 +6,9 @@ import trabica.model.*
 trait NodeApi {
 
   def quorumId: String
-  
+
   def quorumPeer: Peer
-  
+
   def quorumNode: QuorumNode =
     QuorumNode(id = quorumId, peer = Some(quorumPeer))
 

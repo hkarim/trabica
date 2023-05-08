@@ -1,7 +1,6 @@
 package trabica.node
 
 import cats.effect.*
-import cats.effect.std.*
 import cats.syntax.all.*
 import com.google.protobuf.ByteString
 import fs2.*
@@ -13,14 +12,10 @@ import scala.concurrent.duration.*
 
 class LeaderNode(
   val context: NodeContext,
-  val quorumId: String,
-  val quorumPeer: Peer,
   val state: Ref[IO, NodeState.Leader],
-  val events: Queue[IO, Event],
   val signal: Interrupt,
   val streamSignal: SignallingRef[IO, Boolean],
   val replicatedEntries: Ref[IO, Map[Index, Int]],
-  val supervisor: Supervisor[IO],
   val trace: NodeTrace,
 ) extends Node[NodeState.Leader] {
 
@@ -38,8 +33,8 @@ class LeaderNode(
 
   override def run: IO[FiberIO[Unit]] =
     for {
-      h <- clients.use(heartbeatStream).supervise(supervisor)
-      _ <- clients.use(replicate).supervise(supervisor)
+      h <- clients.use(heartbeatStream).supervise(context.supervisor)
+      _ <- clients.use(replicate).supervise(context.supervisor)
     } yield h
 
   override def interrupt: IO[Unit] =
@@ -189,7 +184,7 @@ class LeaderNode(
           _ <-
             if header.term > currentState.localState.currentTerm then {
               val newState = makeFollowerState(currentState, header.term)
-              events.offer(
+              context.events.offer(
                 Event.NodeStateChanged(
                   oldState = currentState,
                   newState = newState,
@@ -240,26 +235,18 @@ class LeaderNode(
 object LeaderNode {
   def instance(
     context: NodeContext,
-    quorumId: String,
-    quorumPeer: Peer,
     state: Ref[IO, NodeState.Leader],
-    events: Queue[IO, Event],
     signal: Interrupt,
-    supervisor: Supervisor[IO],
     trace: NodeTrace,
   ): IO[LeaderNode] = for {
     streamSignal      <- SignallingRef.of[IO, Boolean](false)
     replicatedEntries <- Ref.of[IO, Map[Index, Int]](Map.empty)
     node = new LeaderNode(
       context,
-      quorumId,
-      quorumPeer,
       state,
-      events,
       signal,
       streamSignal,
       replicatedEntries,
-      supervisor,
       trace,
     )
   } yield node

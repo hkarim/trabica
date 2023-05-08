@@ -14,13 +14,9 @@ import scala.concurrent.duration.*
 
 class CandidateNode(
   val context: NodeContext,
-  val quorumId: String,
-  val quorumPeer: Peer,
   val state: Ref[IO, NodeState.Candidate],
-  val events: Queue[IO, Event],
   val signal: Interrupt,
   val streamSignal: SignallingRef[IO, Boolean],
-  val supervisor: Supervisor[IO],
   val trace: NodeTrace,
 ) extends Node[NodeState.Candidate] {
 
@@ -45,8 +41,8 @@ class CandidateNode(
   override def lens: NodeStateLens[NodeState.Candidate] =
     NodeStateLens[NodeState.Candidate]
 
-  def run: IO[FiberIO[Unit]] =
-    clients.use(voteStream).supervise(supervisor)
+  override def run: IO[FiberIO[Unit]] =
+    clients.use(voteStream).supervise(context.supervisor)
 
   override def interrupt: IO[Unit] =
     streamSignal.set(true) >>
@@ -61,7 +57,7 @@ class CandidateNode(
         s.copy(localState = localState)
       }
       _ <- logger.debug(s"$prefix starting vote stream with term ${newState.localState.currentTerm}")
-      _ <- events.offer(
+      _ <- context.events.offer(
         Event.NodeStateChanged(newState, newState, StateTransitionReason.ElectionStarted)
       )
     } yield ()
@@ -140,7 +136,7 @@ class CandidateNode(
               matchIndex <- quorum.map { q =>
                 q.nodes
                   .toVector
-                  .filterNot(_.id == quorumId)
+                  .filterNot(_.id == context.quorumId)
                   .foldLeft(Map.empty[Peer, Index]) { (m, next) =>
                     next.peer match {
                       case Some(p) =>
@@ -165,7 +161,7 @@ class CandidateNode(
 
               _ <-
                 if newlyElected && !currentlyElected then
-                  events.offer(
+                  context.events.offer(
                     Event.NodeStateChanged(
                       currentState,
                       newState,
@@ -187,7 +183,7 @@ class CandidateNode(
           _ <-
             if header.term > currentState.localState.currentTerm then {
               val followerState = makeFollowerState(currentState, header.term)
-              events.offer(
+              context.events.offer(
                 Event.NodeStateChanged(
                   oldState = currentState,
                   newState = followerState,
@@ -209,7 +205,7 @@ class CandidateNode(
         if currentState.localState.currentTerm <= header.term then {
           // a leader has been elected other than this candidate, change state to follower
           val newState = makeFollowerState(currentState, header.term)
-          events.offer(
+          context.events.offer(
             Event.NodeStateChanged(
               oldState = currentState,
               newState = newState,
@@ -224,24 +220,16 @@ class CandidateNode(
 object CandidateNode {
   def instance(
     context: NodeContext,
-    quorumId: String,
-    quorumPeer: Peer,
     state: Ref[IO, NodeState.Candidate],
-    events: Queue[IO, Event],
     signal: Interrupt,
-    supervisor: Supervisor[IO],
     trace: NodeTrace,
   ): IO[CandidateNode] = for {
     streamSignal <- SignallingRef.of[IO, Boolean](false)
     node = new CandidateNode(
       context,
-      quorumId,
-      quorumPeer,
       state,
-      events,
       signal,
       streamSignal,
-      supervisor,
       trace,
     )
   } yield node

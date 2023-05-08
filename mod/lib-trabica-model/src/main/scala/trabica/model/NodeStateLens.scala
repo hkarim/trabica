@@ -7,11 +7,6 @@ trait NodeStateLens[S <: NodeState] {
 object NodeStateLens {
   def apply[S <: NodeState](using ev: NodeStateLens[S]): NodeStateLens[S] = ev
 
-  given NodeStateLens[NodeState.NonVoter] with {
-    def updated(state: NodeState.NonVoter, localState: LocalState): NodeState.NonVoter =
-      state.copy(localState = localState)
-  }
-
   given NodeStateLens[NodeState.Follower] with {
     def updated(state: NodeState.Follower, localState: LocalState): NodeState.Follower =
       state.copy(localState = localState)

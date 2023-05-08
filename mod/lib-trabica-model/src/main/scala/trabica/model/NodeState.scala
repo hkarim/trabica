@@ -16,14 +16,6 @@ sealed trait NodeState { self =>
 
 object NodeState {
 
-  final case class NonVoter(
-    localState: LocalState,
-    commitIndex: Index,
-    lastApplied: Index,
-  ) extends NodeState {
-    override val tag: NodeStateTag = NodeStateTag.NonVoter
-  }
-
   final case class Follower(
     localState: LocalState,
     commitIndex: Index,

@@ -1,7 +1,6 @@
 package trabica.node
 
 import cats.effect.*
-import cats.effect.std.{Queue, Supervisor}
 import cats.syntax.all.*
 import scribe.Scribe
 import trabica.model.*
@@ -14,13 +13,7 @@ trait Node[S <: NodeState] {
 
   def context: NodeContext
 
-  def quorumId: String
-
-  def quorumPeer: Peer
-
   def state: Ref[IO, S]
-
-  def events: Queue[IO, Event]
 
   given lens: NodeStateLens[S]
 
@@ -32,6 +25,7 @@ trait Node[S <: NodeState] {
 
   def appendEntries(request: AppendEntriesRequest): IO[Boolean]
 
+  state.access
   def vote(request: VoteRequest): IO[Boolean] =
     for {
       currentState <- state.get
@@ -42,11 +36,12 @@ trait Node[S <: NodeState] {
         s"term=${currentState.localState.currentTerm},",
         s"request.term=${header.term}"
       )
+      candidateId <- header.node.required(NodeError.InvalidMessage)
       result <-
         currentState.localState.votedFor match {
-          case Some(node) =>
-            IO.pure(request.header.flatMap(_.node).contains(node))
-          case None =>
+          case Some(node) if node.id == candidateId.id =>
+            IO.pure(true)
+          case _ =>
             val theirTermIsHigher = header.term > currentState.localState.currentTerm
             for {
               last <- context.store.last
@@ -70,7 +65,7 @@ trait Node[S <: NodeState] {
     } yield result
 
   def quorumNode: QuorumNode =
-    QuorumNode(id = quorumId, peer = quorumPeer.some)
+    QuorumNode(id = context.quorumId, peer = context.quorumPeer.some)
 
   def makeHeader: IO[Header] =
     for {
@@ -96,7 +91,7 @@ trait Node[S <: NodeState] {
   def makeFollowerState(currentState: NodeState, term: Long): NodeState.Follower =
     NodeState.Follower(
       localState = LocalState(
-        node = QuorumNode(id = quorumId, peer = Some(quorumPeer)).some,
+        node = QuorumNode(id = context.quorumId, peer = Some(context.quorumPeer)).some,
         currentTerm = term,
         votedFor = None,
       ),
@@ -119,14 +114,14 @@ trait Node[S <: NodeState] {
   def quorumPeers: IO[Vector[Peer]] =
     for {
       q <- quorum
-      ns = q.nodes.toVector.filterNot(_.id == quorumId)
+      ns = q.nodes.toVector.filterNot(_.id == context.quorumId)
       ps <- ns.traverse(n => n.peer.required(NodeError.StoreError("peers not found")))
     } yield ps
 
   def clients: Resource[IO, Vector[NodeApi]] =
     for {
       q <- Resource.eval(quorum)
-      ns = q.nodes.toVector.filterNot(_.id == quorumId)
+      ns = q.nodes.toVector.filterNot(_.id == context.quorumId)
       clients <- ns.traverse { n =>
         for {
           p <- Resource.eval(n.peer.required(NodeError.StoreError(s"$prefix peer is required")))
@@ -143,24 +138,16 @@ object Node {
 
   def instance(
     context: NodeContext,
-    quorumId: String,
-    quorumPeer: Peer,
-    events: Queue[IO, Event],
-    supervisor: Supervisor[IO],
     trace: Ref[IO, NodeTrace],
     state: NodeState.Follower
   ): IO[Node[NodeState.Follower]] =
     for {
       s <- Deferred[IO, Either[Throwable, Unit]]
-      n <- follower(context, quorumId, quorumPeer, events, supervisor, trace, s, state)
+      n <- follower(context, trace, s, state)
     } yield n
 
   private def follower(
     context: NodeContext,
-    quorumId: String,
-    quorumPeer: Peer,
-    events: Queue[IO, Event],
-    supervisor: Supervisor[IO],
     trace: Ref[IO, NodeTrace],
     signal: Interrupt,
     state: NodeState.Follower,
@@ -168,7 +155,7 @@ object Node {
     for {
       r <- Ref.of[IO, NodeState.Follower](state)
       t <- trace.incrementFollower
-      n <- FollowerNode.instance(context, quorumId, quorumPeer, r, events, signal, supervisor, t)
+      n <- FollowerNode.instance(context, r, signal, t)
     } yield n
 
   def state(command: CliCommand, store: FsmStore): IO[NodeState.Follower] = command match {
