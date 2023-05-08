@@ -121,13 +121,13 @@ class CandidateNode(
       case Left(e) =>
         val peer = client.quorumPeer
         logger.debug(
-          s"$prefix vote response error from peer ${peer.host}:${peer.port}",
+          s"$prefix vote response error from peer ${peer.show}",
           s"${e.getMessage}, ignoring"
         )
       case Right(VoteResponse(Some(_), true, _)) =>
         val peer = client.quorumPeer
         for {
-          _     <- logger.debug(s"$prefix vote granted from peer ${peer.host}:${peer.port}")
+          _     <- logger.debug(s"$prefix vote granted from peer ${peer.show}")
           peers <- quorumPeers
           _ <- state.flatModify { currentState =>
             val votes            = currentState.votes + client.quorumNode
@@ -182,7 +182,7 @@ class CandidateNode(
       case Right(VoteResponse(Some(header), false, _)) =>
         val peer = client.quorumPeer
         for {
-          _            <- logger.debug(s"$prefix vote denied from peer ${peer.host}:${peer.port}")
+          _            <- logger.debug(s"$prefix vote denied from peer ${peer.show}")
           currentState <- state.get
           _ <-
             if header.term > currentState.localState.currentTerm then {
