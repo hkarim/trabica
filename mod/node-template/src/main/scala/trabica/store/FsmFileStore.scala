@@ -109,9 +109,6 @@ object FsmFileStore {
         writeChannel.truncate(size)
       }.void
 
-    def stream: Stream[IO, Long] =
-      streamFrom(0L)
-
     def streamFrom(position: Long): Stream[IO, Long] = {
       val first = if position < 0 then 0 else position
       Stream

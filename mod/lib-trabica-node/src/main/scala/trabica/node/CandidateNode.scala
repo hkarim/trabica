@@ -125,14 +125,16 @@ class CandidateNode(
         for {
           _     <- logger.debug(s"$prefix vote granted from peer ${peer.show}")
           peers <- quorumPeers
+          peersLength = peers.length + 1 // counting ourselves
           _ <- state.flatModify { currentState =>
-            val votes            = currentState.votes + client.quorumNode
+            val votes            = (currentState.votes + client.quorumNode).toVector
             val currentlyElected = currentState.elected
-            val newlyElected     = votes.size >= math.ceil(peers.size / 2) + 1
+            val newlyElected     = votes.length >= math.ceil(peersLength / 2) + 1
             // the purpose here is to prevent firing state change events once we're already elected
             // while the node is still in transition
             // thus preventing unnecessary node transition more than once
             val io = for {
+              _ <- logger.debug(s"$prefix votes reached majority ${votes.length} of total $peersLength")
               matchIndex <- quorum.map { q =>
                 q.nodes
                   .toVector
@@ -172,7 +174,7 @@ class CandidateNode(
 
             } yield ()
 
-            (currentState.copy(votes = votes, elected = newlyElected), io)
+            (currentState.copy(votes = votes.toSet, elected = newlyElected), io)
           }
         } yield ()
       case Right(VoteResponse(Some(header), false, _)) =>

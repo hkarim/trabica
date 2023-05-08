@@ -124,28 +124,32 @@ class LeaderNode(
 
   private def replicationStream(client: NodeApi): IO[Unit] =
     Stream
-      .fixedRateStartImmediately[IO](2000.milliseconds)
+      .fixedRateStartImmediately[IO](100.milliseconds)
       .interruptWhen(streamSignal)
       .evalTap(_ => logger.trace(s"$prefix starting replication to peer ${client.show}"))
       .evalMap { _ =>
         for {
           currentState <- state.get
           lastIndexOption = currentState.matchIndex.get(client.quorumPeer)
-        } yield (currentState, lastIndexOption)
+        } yield lastIndexOption
       }
-      .flatMap { (currentState, lastIndexOption) =>
+      .flatMap { lastIndexOption =>
         context.store
           .streamFrom(lastIndexOption.getOrElse(Index.zero).increment)
           .interruptWhen(streamSignal)
           .evalTap { e =>
-            logger.debug(
-              s"$prefix replicating index:${e.index} -> ${client.show}",
-              s"$prefix matchIndex: ${currentState.matchIndex}",
-              s"$prefix commitIndex: ${currentState.commitIndex}",
-            )
+            state.get.flatTap { currentState =>
+              logger.debug(
+                s"$prefix replicating index:${e.index} -> ${client.show}",
+                s"$prefix matchIndex: ${currentState.matchIndex}",
+                s"$prefix commitIndex: ${currentState.commitIndex}",
+                s"$prefix currentTerm: ${currentState.localState.currentTerm}",
+              )
+            }
           }
           .evalMap { next =>
             for {
+              currentState <- state.get
               prev <-
                 context.store
                   .atIndex(Index.of(next.index - 1))
@@ -207,7 +211,8 @@ class LeaderNode(
   private def onEntryAppended(peer: Peer, index: Index): IO[Unit] =
     for {
       peers <- quorumPeers
-      majority = math.ceil(peers.length / 2) + 1
+      peersLength = peers.length + 1 // counting ourselves
+      majority = math.ceil(peersLength / 2) + 1
       re <- replicatedEntries.updateAndGet { re =>
         val count = re.get(index).map(_ + 1).getOrElse(1)
         re.updated(index, count)
