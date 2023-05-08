@@ -136,27 +136,43 @@ class CandidateNode(
             // the purpose here is to prevent firing state change events once we're already elected
             // while the node is still in transition
             // thus preventing unnecessary node transition more than once
-            val io =
-              if newlyElected && !currentlyElected then {
-                val newState = NodeState.Leader(
-                  localState = LocalState(
-                    node = quorumNode.some,
-                    currentTerm = currentState.localState.currentTerm,
-                    votedFor = None,
-                  ),
-                  commitIndex = currentState.commitIndex,
-                  lastApplied = currentState.lastApplied,
-                  nextIndex = Map.empty,
-                  matchIndex = Map.empty,
-                )
-                events.offer(
-                  Event.NodeStateChanged(
-                    currentState,
-                    newState,
-                    StateTransitionReason.ElectedLeader
+            val io = for {
+              matchIndex <- quorum.map { q =>
+                q.nodes.toVector.foldLeft(Map.empty[Peer, Index]) { (m, next) =>
+                  next.peer match {
+                    case Some(p) =>
+                      m.updated(p, Index.zero)
+                    case None =>
+                      m
+                  }
+                }
+              }.recover(_ => Map.empty[Peer, Index])
+
+              newState = NodeState.Leader(
+                localState = LocalState(
+                  node = quorumNode.some,
+                  currentTerm = currentState.localState.currentTerm,
+                  votedFor = None,
+                ),
+                commitIndex = currentState.commitIndex,
+                lastApplied = currentState.lastApplied,
+                nextIndex = matchIndex.map { (k, v) => (k, v.increment) },
+                matchIndex = matchIndex,
+              )
+
+              _ <-
+                if newlyElected && !currentlyElected then
+                  events.offer(
+                    Event.NodeStateChanged(
+                      currentState,
+                      newState,
+                      StateTransitionReason.ElectedLeader
+                    )
                   )
-                )
-              } else IO.unit
+                else IO.unit
+
+            } yield ()
+
             (currentState.copy(votes = votes, elected = newlyElected), io)
           }
         } yield ()

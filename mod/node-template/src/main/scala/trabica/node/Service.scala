@@ -16,14 +16,15 @@ object Service
 
   private val logger = scribe.cats[IO]
 
-  def feed(store: FsmStore): IO[Unit] =
+  private def feed(store: FsmStore): IO[Unit] =
     fs2.Stream
       .range(2, 20, 1)
+      .delayBy[IO](2.seconds)
       .metered[IO](100.milliseconds)
       .evalMap { index =>
         val entry = LogEntry(
           index = index,
-          term = 20L,
+          term = 1L,
           tag = LogEntryTag.Data,
           data = ByteString.copyFromUtf8("hello raft")
         )
@@ -37,8 +38,14 @@ object Service
     CliCommand.parse.map { command =>
       Supervisor[IO](await = false).use { supervisor =>
         FsmFileStore.resource(command.dataDirectory).use { store =>
+          val feedIO = command match {
+            case _: CliCommand.Bootstrap =>
+              feed(store)
+            case _: CliCommand.Startup =>
+              IO.unit
+          }
           for {
-            _ <- feed(store).supervise(supervisor)
+            _ <- feedIO.supervise(supervisor)
             _ <- Trabica.run(supervisor, command, store, Grpc).guarantee {
               store
                 .stream

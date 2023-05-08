@@ -246,8 +246,16 @@ object FsmFileStore {
             .recover(_ => Option.empty[LogEntry])
         r <- (lastEntry, existingEntry) match {
           case (None, None) =>
-            // no entries in the log, we can safely append
-            write(entry).map(_ => AppendResult.Appended)
+            // no entries in the log, first index must be 1
+            if entry.index == 1L then
+              write(entry).map(_ => AppendResult.Appended)
+            else
+              IO.pure(
+                AppendResult.NonMonotonicIndex(
+                  storeIndex = Index.zero,
+                  incomingIndex = Index.of(entry.index),
+                )
+              )
           case (Some(e), None) =>
             // last entry exists, but no existing entry with the incoming index
             // check that the index is strictly monotonic
