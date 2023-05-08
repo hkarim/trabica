@@ -138,14 +138,17 @@ class CandidateNode(
             // thus preventing unnecessary node transition more than once
             val io = for {
               matchIndex <- quorum.map { q =>
-                q.nodes.toVector.foldLeft(Map.empty[Peer, Index]) { (m, next) =>
-                  next.peer match {
-                    case Some(p) =>
-                      m.updated(p, Index.zero)
-                    case None =>
-                      m
+                q.nodes
+                  .toVector
+                  .filterNot(_.id == quorumId)
+                  .foldLeft(Map.empty[Peer, Index]) { (m, next) =>
+                    next.peer match {
+                      case Some(p) =>
+                        m.updated(p, Index.zero)
+                      case None =>
+                        m
+                    }
                   }
-                }
               }.recover(_ => Map.empty[Peer, Index])
 
               newState = NodeState.Leader(
@@ -156,7 +159,7 @@ class CandidateNode(
                 ),
                 commitIndex = currentState.commitIndex,
                 lastApplied = currentState.lastApplied,
-                nextIndex = matchIndex.map { (k, v) => (k, v.increment) },
+                nextIndex = matchIndex.map((k, v) => (k, v.increment)),
                 matchIndex = matchIndex,
               )
 

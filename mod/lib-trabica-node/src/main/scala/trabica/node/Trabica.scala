@@ -1,7 +1,7 @@
 package trabica.node
 
 import cats.effect.*
-import cats.effect.std.{Queue, Supervisor}
+import cats.effect.std.{Mutex, Queue, Supervisor}
 import cats.syntax.all.*
 import com.typesafe.config.ConfigFactory
 import fs2.*
@@ -16,6 +16,7 @@ class Trabica(
   val ref: Ref[IO, Node[_ <: NodeState]],
   val events: Queue[IO, Event],
   val supervisor: Supervisor[IO],
+  val mutex: Mutex[IO],
   val trace: Ref[IO, NodeTrace],
 ) extends NodeApi {
 
@@ -57,14 +58,18 @@ class Trabica(
   ): IO[Unit] = for {
     f <- ref.flatModify { oldNode =>
       val io = for {
-        _       <- logger.debug(s"interrupting current node")
-        _       <- oldNode.interrupt
-        _       <- logger.debug(s"$loggingPrefix starting node transition")
-        s       <- newNode.state.get
-        _       <- logger.debug(s"$loggingPrefix writing persistent state to disk")
-        _       <- context.store.writeState(s.localState)
-        _       <- logger.debug(s"$loggingPrefix starting")
-        spawned <- newNode.run
+        _ <- logger.debug(s"interrupting current node")
+        _ <- oldNode.interrupt
+        _ <- logger.debug(s"$loggingPrefix starting node transition")
+        spawned <- mutex.lock.surround {
+          for {
+            s       <- newNode.state.get
+            _       <- logger.debug(s"$loggingPrefix writing persistent state to disk")
+            _       <- context.store.writeState(s.localState)
+            _       <- logger.debug(s"$loggingPrefix starting")
+            spawned <- newNode.run
+          } yield spawned
+        }
       } yield spawned
       (newNode, io)
     }
@@ -186,7 +191,8 @@ object Trabica {
       trace  <- Ref.of[IO, NodeTrace](NodeTrace.instance)
       node   <- Node.instance(context, quorumNode.id, quorumPeer, events, supervisor, trace, state)
       ref    <- Ref.of[IO, Node[_ <: NodeState]](node)
-      trabica = new Trabica(context, quorumNode.id, quorumPeer, ref, events, supervisor, trace)
+      mutex  <- Mutex[IO]
+      trabica = new Trabica(context, quorumNode.id, quorumPeer, ref, events, supervisor, mutex, trace)
       _ <- node.run.supervise(supervisor)
       _ <- logger.info(s"starting up in mode follower")
       _ <- trabica.run.supervise(supervisor)
