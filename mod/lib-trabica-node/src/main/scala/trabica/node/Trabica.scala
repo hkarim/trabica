@@ -120,7 +120,19 @@ class Trabica(
       outdated = requestHeader.term > currentState.localState.currentTerm
       responseHeader <- server.makeHeader
       response <-
-        if outdated && currentState.tag != NodeStateTag.Follower then {
+        if outdated && currentState.tag == NodeStateTag.Follower then {
+          val ls       = currentState.localState.copy(currentTerm = requestHeader.term)
+          val newState = currentState.updated(ls)(using server.lens)
+          for {
+            _ <- server.state.set(newState)
+            _ <- context.store.writeState(ls)
+            s <- server.appendEntries(request)
+            r = AppendEntriesResponse(
+              header = responseHeader.some,
+              success = s,
+            )
+          } yield r
+        } else if outdated && currentState.tag != NodeStateTag.Follower then {
           val followerState = server.makeFollowerState(currentState, requestHeader.term)
           val r = AppendEntriesResponse(
             header = responseHeader.some,

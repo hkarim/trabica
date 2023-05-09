@@ -141,7 +141,7 @@ class LeaderNode(
             state.get.flatTap { currentState =>
               logger.debug(
                 s"$prefix replicating index:${e.index} -> ${client.show}",
-                s"$prefix matchIndex: ${currentState.matchIndex}",
+                s"$prefix matchIndex: ${currentState.matchIndex.show}",
                 s"$prefix commitIndex: ${currentState.commitIndex}",
                 s"$prefix currentTerm: ${currentState.localState.currentTerm}",
               )
@@ -201,8 +201,7 @@ class LeaderNode(
       case Right(_) =>
         index match {
           case Some(value) =>
-            logger.debug(s"$prefix append entry success at index $value") >>
-              onEntryAppended(peer, value)
+            onEntryAppended(peer, value)
           case None =>
             IO.unit
         }
@@ -233,6 +232,12 @@ class LeaderNode(
           m.removed(index)
         else m
       }
+      currentState <- state.get
+      _ <- logger.debug(
+        s"$prefix append entry success at index $index",
+        s"$prefix matchIndex: ${currentState.matchIndex.show}",
+        s"$prefix commitIndex: ${currentState.commitIndex}",
+      )
     } yield ()
 
 }

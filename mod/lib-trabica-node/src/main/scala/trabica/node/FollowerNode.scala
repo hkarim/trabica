@@ -85,7 +85,7 @@ class FollowerNode(
           IO.pure(Vector.empty)
       }
       currentState <- state.get
-      _            <- logger.debug(s"$prefix current peers: $peers")
+      _            <- logger.debug(s"$prefix current peers: ${peers.show}")
       // _            <- if peers.nonEmpty && currentState.localState.votedFor.isEmpty then timeout else IO.unit
       _ <- if peers.nonEmpty then timeout else IO.unit
     } yield ()
@@ -130,11 +130,14 @@ class FollowerNode(
       _ <-
         if request.entries.nonEmpty then
           logger.debug(
-            s"$prefix - size: ${request.entries.size}",
-            s"check: $check",
+            s"$prefix",
+            s"currentTerm: ${currentState.localState.currentTerm}",
+            s"requestTerm: ${header.term}",
             s"termOk: $termOK",
             s"firstEntry: $firstEntry",
-            s"logOk: $logOk"
+            s"logOk: $logOk",
+            s"size: ${request.entries.size}",
+            s"check: $check",
           )
         else IO.unit
       results <-

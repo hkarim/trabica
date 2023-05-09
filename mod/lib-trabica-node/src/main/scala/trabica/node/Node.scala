@@ -25,7 +25,6 @@ trait Node[S <: NodeState] {
 
   def appendEntries(request: AppendEntriesRequest): IO[Boolean]
 
-  state.access
   def vote(request: VoteRequest): IO[Boolean] =
     for {
       currentState <- state.get
@@ -40,7 +39,8 @@ trait Node[S <: NodeState] {
       result <-
         currentState.localState.votedFor match {
           case Some(node) if node.id == candidateId.id =>
-            IO.pure(true)
+            logger.debug(s"$prefix already voted for ${candidateId.id}") >>
+              IO.pure(true)
           case _ =>
             val theirTermIsHigher = header.term > currentState.localState.currentTerm
             for {
@@ -59,7 +59,7 @@ trait Node[S <: NodeState] {
                     _ <- context.store.writeState(ls)
                   } yield true
                 } else IO.pure(false)
-              _ <- logger.debug(s"$prefix responding with voteGranted: $voteGranted")
+              _ <- logger.debug(s"$prefix responding with voteGranted: $voteGranted to peer ${candidateId.peer.show}")
             } yield voteGranted
         }
     } yield result

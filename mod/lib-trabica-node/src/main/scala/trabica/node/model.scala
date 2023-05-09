@@ -47,6 +47,20 @@ given Show[Peer] with {
     s"${instance.host}:${instance.port}"
 }
 
+given Show[Vector[Peer]] with {
+  override def show(instance: Vector[Peer]): String =
+    instance
+      .map(peer => s"${peer.host}:${peer.port}")
+      .mkString("[", ", ", "]")
+}
+
+given Show[Map[Peer, Index]] with {
+  override def show(instance: Map[Peer, Index]): String =
+    instance.map { (peer, index) =>
+      s"${peer.host}:${peer.port}->$index"
+    }.mkString("[", ", ", "]")
+}
+
 case class NodeTrace(
   followerId: Int,
   candidateId: Int,

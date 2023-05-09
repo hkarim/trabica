@@ -134,7 +134,7 @@ class CandidateNode(
             // while the node is still in transition
             // thus preventing unnecessary node transition more than once
             val io = for {
-              _ <- logger.debug(s"$prefix votes reached majority ${votes.length} of total $peersLength")
+              _ <- logger.debug(s"$prefix votes reached ${votes.length} of total $peersLength")
               matchIndex <- quorum.map { q =>
                 q.nodes
                   .toVector
@@ -162,15 +162,16 @@ class CandidateNode(
               )
 
               _ <-
-                if newlyElected && !currentlyElected then
-                  context.events.offer(
-                    Event.NodeStateChanged(
-                      currentState,
-                      newState,
-                      StateTransitionReason.ElectedLeader
+                if newlyElected && !currentlyElected then {
+                  logger.debug(s"$prefix elected, votes reached majority ${votes.length} of total $peersLength") >>
+                    context.events.offer(
+                      Event.NodeStateChanged(
+                        currentState,
+                        newState,
+                        StateTransitionReason.ElectedLeader
+                      )
                     )
-                  )
-                else IO.unit
+                } else IO.unit
 
             } yield ()
 
