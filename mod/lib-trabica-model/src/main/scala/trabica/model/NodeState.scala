@@ -1,7 +1,6 @@
 package trabica.model
 
 enum NodeStateTag {
-  case NonVoter
   case Follower
   case Candidate
   case Leader
