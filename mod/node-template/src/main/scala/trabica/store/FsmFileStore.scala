@@ -61,6 +61,61 @@ object FsmFileStore {
       }
   }
 
+  private class ConfFileStore(channel: FileChannel) {
+
+    def bootstrap: IO[Unit] =
+      IO.blocking(channel.truncate(0L)).void
+
+    def write(entry: LogEntry): IO[Unit] =
+      IO.blocking {
+        // remove existing state if any
+        channel.truncate(0L)
+        // compute the serialized state length
+        val length = entry.serializedSize
+        val size   = 4 + length
+        // allocate a buffer to hold [length,data]
+        val buffer = ByteBuffer.allocate(size)
+        buffer.mark()
+        // write the length into the buffer
+        buffer.putInt(length)
+        // write the state into the buffer
+        entry.writeTo(CodedOutputStream.newInstance(buffer))
+        // write the buffer into the channel
+        buffer.reset()
+        channel.write(buffer)
+      }.void
+
+    def read: IO[Option[LogEntry]] =
+      IO.blocking {
+        if channel.size() == 0 then
+          None
+        else {
+          // allocate a buffer to read the entry length
+          val lengthBuffer = ByteBuffer.allocate(4) // 32-bits
+          lengthBuffer.mark()
+          // read the length from the channel at the index position
+          channel.read(lengthBuffer, 0L)
+          lengthBuffer.reset()
+          val length = lengthBuffer.getInt
+          // allocate a buffer of capacity `length`
+          val stateBuffer = ByteBuffer.allocate(length)
+          stateBuffer.mark()
+          // read the entry from the channel
+          channel.read(stateBuffer, 4)
+          stateBuffer.reset()
+          Some(LogEntry.parseFrom(CodedInputStream.newInstance(stateBuffer)))
+        }
+      }
+
+    def truncate(upToIncluding: Index): IO[Unit] =
+      read.flatMap {
+        case Some(v) if v.index <= upToIncluding.value =>
+          IO.blocking(channel.truncate(0L)).void
+        case _ =>
+          IO.unit
+      }
+  }
+
   private class IndexFileStore(writeChannel: FileChannel, readChannel: FileChannel) {
 
     def bootstrap: IO[Unit] =
@@ -126,22 +181,20 @@ object FsmFileStore {
     writeChannel: FileChannel,
     readChannel: FileChannel,
     stateStore: StateFileStore,
-    indexStore: IndexFileStore
+    indexStore: IndexFileStore,
+    confStore: ConfFileStore,
   ) extends FsmStore {
 
     override def bootstrap: IO[Unit] =
       for {
+        _ <- confStore.bootstrap
         _ <- stateStore.bootstrap
         _ <- indexStore.bootstrap
         _ <- IO.blocking(writeChannel.truncate(0L)).void
       } yield ()
 
-    // TODO: should work backwards, would be more efficient
     override def configuration: IO[Option[LogEntry]] =
-      stream
-        .filter(_.tag == LogEntryTag.Conf)
-        .compile
-        .last
+      confStore.read
 
     override def readState: IO[Option[LocalState]] =
       stateStore.read
@@ -233,6 +286,14 @@ object FsmFileStore {
           // index the position of this entry
           indexStore.logEntryAppended(p)
         }
+        .flatMap { _ =>
+          // if this entry is a configuration
+          // save it as the latest
+          if entry.tag == LogEntryTag.Conf then
+            confStore.write(entry)
+          else
+            IO.unit
+        }
 
     override def append(entry: LogEntry): IO[AppendResult] =
       for {
@@ -296,12 +357,14 @@ object FsmFileStore {
         for {
           _ <- IO.blocking(writeChannel.truncate(0L))
           _ <- indexStore.truncate(upToIncluding)
+          _ <- confStore.truncate(upToIncluding)
         } yield ()
       } else {
         indexStore.positionOf(Index.of(upToIncluding.value - 1)).flatMap { position =>
           for {
             _ <- IO.blocking(writeChannel.truncate(position))
             _ <- indexStore.truncate(upToIncluding)
+            _ <- confStore.truncate(upToIncluding)
           } yield ()
         }
       }
@@ -313,6 +376,7 @@ object FsmFileStore {
     val indexPath = rootPath.resolve("index.trabica").normalize
     val logPath   = rootPath.resolve("log.trabica").normalize
     val statePath = rootPath.resolve("state.trabica").normalize
+    val confPath  = rootPath.resolve("conf.trabica").normalize
 
     val readWriteOptions = util.EnumSet.of(
       StandardOpenOption.CREATE,
@@ -325,6 +389,10 @@ object FsmFileStore {
     val stateChannel = Resource.fromAutoCloseable {
       IO.blocking(Files.createDirectories(rootPath)) >>
         IO.blocking(FileChannel.open(statePath, readWriteOptions))
+    }
+    val confChannel = Resource.fromAutoCloseable {
+      IO.blocking(Files.createDirectories(rootPath)) >>
+        IO.blocking(FileChannel.open(confPath, readWriteOptions))
     }
     val indexWriteChannel = Resource.fromAutoCloseable {
       IO.blocking(Files.createDirectories(rootPath)) >>
@@ -344,6 +412,8 @@ object FsmFileStore {
     }
 
     for {
+      confReadWrite <- confChannel
+      confStore = new ConfFileStore(confReadWrite)
       stateReadWrite <- stateChannel
       stateStore = new StateFileStore(stateReadWrite)
       indexWrite <- indexWriteChannel
@@ -351,7 +421,7 @@ object FsmFileStore {
       indexStore = new IndexFileStore(indexWrite, indexRead)
       logWrite <- logWriteChannel
       logRead  <- logReadChannel
-      logStore = new FsmFileStore(logWrite, logRead, stateStore, indexStore)
+      logStore = new FsmFileStore(logWrite, logRead, stateStore, indexStore, confStore)
     } yield logStore
   }
 }
