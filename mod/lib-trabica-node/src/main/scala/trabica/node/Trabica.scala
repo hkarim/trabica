@@ -177,7 +177,10 @@ class Trabica(
   override def addServer(request: AddServerRequest): IO[AddServerResponse] =
     for {
       server <- ref.get
-      response <- server.addServer(request)
+      response <-
+        mutex.lock.surround {
+          server.addServer(request)
+        }
     } yield response
 
   override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] = ???
