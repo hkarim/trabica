@@ -23,13 +23,14 @@ extension (self: LogEntry) {
     } else IO.pure(None)
 }
 
+extension (self: Option[Header]) {
+  def required: IO[Header] =
+    IO.fromOption(self)(NodeError.MissingHeader)
+}
+
 extension [A](self: Option[A]) {
-  def required(error: => NodeError): IO[A] = self match {
-    case Some(value) =>
-      IO.pure(value)
-    case None =>
-      IO.raiseError(error)
-  }
+  def required(error: => NodeError): IO[A] =
+    IO.fromOption(self)(error)
 }
 
 extension [S <: NodeState](self: S) {

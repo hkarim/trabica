@@ -25,8 +25,14 @@ class LeaderNode(
 
   override final val prefix: String = s"[leader-$id]"
 
+  private final val rpcTimeout: Long =
+    context.config.getLong("trabica.rpc.timeout")
+
   private final val heartbeatStreamRate: Long =
     context.config.getLong("trabica.leader.heartbeat-stream.rate")
+
+  private final val replicationStreamRate: Long =
+    context.config.getLong("trabica.leader.replication-stream.rate")
 
   override def lens: NodeStateLens[NodeState.Leader] =
     NodeStateLens[NodeState.Leader]
@@ -67,7 +73,7 @@ class LeaderNode(
               responses <- cs.parTraverse { c =>
                 logger.trace(s"$prefix sending heartbeat to ${c.show}") >>
                   c.appendEntries(request)
-                    .timeout(100.milliseconds)
+                    .timeout(rpcTimeout.milliseconds)
                     .attempt
                     .flatMap(r => onAppendEntriesResponse(c.quorumPeer, None, r))
               }
@@ -110,7 +116,7 @@ class LeaderNode(
       )
       response <- client.appendEntries(request)
     } yield response
-    io.timeout(100.milliseconds)
+    io.timeout(rpcTimeout.milliseconds)
       .attempt
       .flatMap { response =>
         onAppendEntriesResponse(
@@ -123,7 +129,7 @@ class LeaderNode(
 
   private def replicationStream(client: NodeApi): IO[Unit] =
     Stream
-      .fixedRateStartImmediately[IO](100.milliseconds)
+      .fixedRateStartImmediately[IO](replicationStreamRate.milliseconds)
       .interruptWhen(streamSignal)
       .evalTap(_ => logger.trace(s"$prefix starting replication to peer ${client.show}"))
       .evalMap { _ =>
@@ -183,7 +189,7 @@ class LeaderNode(
         for {
           _            <- logger.trace(s"$prefix response `${r.success}` from peer ${peer.show}")
           currentState <- state.get
-          header       <- r.header.required(NodeError.InvalidMessage)
+          header       <- r.header.required
           _ <-
             if header.term > currentState.localState.currentTerm then {
               val newState = makeFollowerState(currentState, header.term)

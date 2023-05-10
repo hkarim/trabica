@@ -28,14 +28,14 @@ trait Node[S <: NodeState] {
   def vote(request: VoteRequest): IO[Boolean] =
     for {
       currentState <- state.get
-      header       <- request.header.required(NodeError.InvalidMessage)
+      header       <- request.header.required
       _ <- logger.debug(
         s"$prefix vote requested",
         s"votedFor=${currentState.localState.votedFor},",
         s"currentTerm=${currentState.localState.currentTerm},",
         s"requestTerm=${header.term}"
       )
-      candidateId <- header.node.required(NodeError.InvalidMessage)
+      candidateId <- header.node.required(NodeError.InvalidHeader)
       result <-
         currentState.localState.votedFor match {
           case Some(node) if node.id == candidateId.id =>
@@ -53,7 +53,7 @@ trait Node[S <: NodeState] {
               voteGranted <-
                 if theirTermIsHigher && !ourLogIsBetter then {
                   for {
-                    qn <- header.node.required(NodeError.InvalidMessage)
+                    qn <- header.node.required(NodeError.InvalidHeader)
                     ls = currentState.localState.copy(votedFor = qn.some)
                     _ <- state.set(currentState.updated(localState = ls))
                     _ <- context.store.writeState(ls)

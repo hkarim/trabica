@@ -25,7 +25,7 @@ class CandidateNode(
   private final val id: Int = trace.candidateId
 
   override final val prefix: String = s"[candidate-$id]"
-
+  
   private final val voteStreamRate: Long =
     context.config.getLong("trabica.candidate.vote-stream.rate")
 
@@ -197,13 +197,13 @@ class CandidateNode(
         } yield ()
       case Right(v) =>
         logger.debug(s"$prefix invalid vote message received: $v") >>
-          IO.raiseError(NodeError.InvalidMessage)
+          IO.raiseError(NodeError.MissingHeader)
     }
 
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     for {
       currentState <- state.get
-      header       <- request.header.required(NodeError.InvalidMessage)
+      header       <- request.header.required
       _ <-
         if currentState.localState.currentTerm <= header.term then {
           // a leader has been elected other than this candidate, change state to follower

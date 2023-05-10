@@ -6,16 +6,20 @@ sealed trait NodeError extends Throwable {
 
 object NodeError {
 
-  case object InvalidMessage extends NodeError {
-    override def getMessage: String = "invalid input message"
+  case object MissingHeader extends NodeError {
+    override val getMessage: String = "missing message header"
   }
 
-  case class ValueError(message: String) extends NodeError {
-    override def getMessage: String = message
+  case object InvalidHeader extends NodeError {
+    override val getMessage: String = "invalid message header"
   }
 
-  case class StoreError(message: String) extends NodeError {
-    override def getMessage: String = message
+  final case class ValueError(message: String) extends NodeError {
+    override val getMessage: String = message
+  }
+
+  final case class StoreError(message: String) extends NodeError {
+    override val getMessage: String = message
   }
 
 }

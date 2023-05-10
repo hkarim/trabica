@@ -121,7 +121,7 @@ class FollowerNode(
   override def appendEntries(request: AppendEntriesRequest): IO[Boolean] =
     for {
       _            <- heartbeat.set(Some(()))
-      header       <- request.header.required(NodeError.InvalidMessage)
+      header       <- request.header.required
       currentState <- state.get
       termOK     = currentState.localState.currentTerm <= header.term
       firstEntry = (request.prevLogIndex == 0) && (request.prevLogTerm == 0)

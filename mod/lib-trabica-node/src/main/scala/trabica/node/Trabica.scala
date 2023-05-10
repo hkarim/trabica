@@ -122,7 +122,7 @@ class Trabica(
     for {
       server        <- ref.get
       currentState  <- server.state.get
-      requestHeader <- request.header.required(NodeError.InvalidMessage)
+      requestHeader <- request.header.required
       outdated = requestHeader.term > currentState.localState.currentTerm
       response <-
         if outdated && currentState.tag == NodeStateTag.Follower then {
