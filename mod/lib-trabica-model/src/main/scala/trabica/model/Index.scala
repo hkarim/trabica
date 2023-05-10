@@ -8,7 +8,8 @@ object Index {
 
   final val one: Index = 1L
 
-  def of(value: Long): Index = value
+  def of(value: Long): Index =
+    if value < 0 then 0L else value
 
   extension (self: Index) {
     def value: Long      = self

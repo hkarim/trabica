@@ -8,4 +8,6 @@ package trabica;
 service Trabica {
   rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse) {}
   rpc Vote(VoteRequest) returns (VoteResponse) {}
+  rpc AddServer(AddServerRequest) returns (AddServerResponse) {}
+  rpc RemoveServer(RemoveServerRequest) returns (RemoveServerResponse) {}
 }

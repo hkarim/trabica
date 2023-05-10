@@ -65,3 +65,30 @@ message VoteResponse {
   Header header = 1;
   bool voteGranted = 2;
 }
+
+message AddServerRequest {
+  QuorumNode node = 1;
+}
+
+message AddServerResponse {
+  enum Status {
+    NotLeader = 0;
+    Timeout = 1;
+    OK = 2;
+  }
+  Status status = 1;
+  optional QuorumNode leaderHint = 2;
+}
+
+message RemoveServerRequest {
+  QuorumNode node = 1;
+}
+
+message RemoveServerResponse {
+  enum Status {
+    NotLeader = 0;
+    OK = 1;
+  }
+  Status status = 1;
+  optional QuorumNode leaderHint = 2;
+}

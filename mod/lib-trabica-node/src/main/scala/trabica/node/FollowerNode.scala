@@ -188,6 +188,29 @@ class FollowerNode(
           }
         } else IO.pure(Vector(false))
       response = results.forall(identity)
+      _ <-
+        // if one of the entries is a config entry and it is committed
+        // we need to reload
+        if response then
+          request.entries.find(_.tag == LogEntryTag.Conf) match {
+            case Some(configEntry) =>
+              for {
+                currentState <- state.get
+                _ <-
+                  if currentState.commitIndex.value >= configEntry.index then
+                    context.events.offer(
+                      Event.NodeStateChanged(
+                        oldState = currentState,
+                        newState = currentState,
+                        reason = StateTransitionReason.ConfigurationChanged
+                      )
+                    )
+                  else IO.unit
+              } yield ()
+            case None =>
+              IO.unit
+          }
+        else IO.unit
     } yield response
 
   private def updateCommitIndex(leaderCommitIndex: Long, lastIndex: Long): IO[Unit] =
@@ -197,6 +220,12 @@ class FollowerNode(
       else
         currentState
     }
+
+  override def addServer(request: AddServerRequest): IO[AddServerResponse] =
+    AddServerResponse(
+      status = AddServerResponse.Status.NotLeader,
+      leaderHint = None,
+    ).pure[IO]
 
 }
 

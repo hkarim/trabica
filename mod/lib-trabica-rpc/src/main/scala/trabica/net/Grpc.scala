@@ -13,6 +13,12 @@ object Grpc extends Networking {
 
     override def vote(request: VoteRequest): IO[VoteResponse] =
       client.vote(request, new Metadata)
+
+    override def addServer(request: AddServerRequest): IO[AddServerResponse] =
+      client.addServer(request, new Metadata)
+
+    override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] =
+      client.removeServer(request, new Metadata)
   }
 
   private class GrpcServerNodeApi(server: NodeApi) extends TrabicaFs2Grpc[IO, Metadata] {
@@ -22,6 +28,12 @@ object Grpc extends Networking {
 
     override def vote(request: VoteRequest, ctx: Metadata): IO[VoteResponse] =
       server.vote(request)
+
+    override def addServer(request: AddServerRequest, ctx: Metadata): IO[AddServerResponse] =
+      server.addServer(request)
+
+    override def removeServer(request: RemoveServerRequest, ctx: Metadata): IO[RemoveServerResponse] =
+      server.removeServer(request)
   }
 
   override def client(prefix: String, quorumId: String, quorumPeer: trabica.model.Peer): Resource[IO, NodeApi] =

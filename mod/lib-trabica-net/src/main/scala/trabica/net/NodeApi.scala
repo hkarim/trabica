@@ -15,5 +15,9 @@ trait NodeApi {
   def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse]
 
   def vote(request: VoteRequest): IO[VoteResponse]
+  
+  def addServer(request: AddServerRequest): IO[AddServerResponse]
+  
+  def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse]
 
 }

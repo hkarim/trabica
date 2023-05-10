@@ -245,6 +245,146 @@ class LeaderNode(
       )
     } yield ()
 
+  override def addServer(request: AddServerRequest): IO[AddServerResponse] = {
+    def stream(client: NodeApi, fromIndex: Index): IO[Index] =
+      context.store
+        .streamFrom(fromIndex)
+        .interruptWhen(signal)
+        .handleErrorWith(_ => Stream.empty)
+        .take(5)
+        .evalMap { entry =>
+          for {
+            currentState <- state.get
+            prev <- context.store
+              .atIndex(Index.of(entry.index - 1))
+              .recover(_ => LogEntry.defaultInstance)
+            h <- makeHeader(currentState)
+            request = AppendEntriesRequest(
+              header = h.some,
+              prevLogIndex = prev.index,
+              prevLogTerm = prev.term,
+              commitIndex = currentState.commitIndex.value,
+              entries = Vector(entry),
+            )
+            responseSuccess <-
+              client.appendEntries(request)
+                .map(_.success)
+                .timeout(100.milliseconds)
+                .recover(_ => false)
+            replicatedIndex = if responseSuccess then Index.of(entry.index) else fromIndex
+          } yield replicatedIndex
+        }
+        .compile
+        .fold(fromIndex) { (_, next) =>
+          next
+        }
+
+    def replicate(fromIndex: Index, node: QuorumNode, peer: Peer): IO[Index] =
+      Stream
+        .resource(
+          context.networking
+            .client(prefix, node.id, peer)
+        )
+        .interruptWhen(signal)
+        .evalMap { client =>
+          stream(client, fromIndex)
+        }
+        .compile
+        .fold(fromIndex) { (_, next) =>
+          next
+        }
+
+    def rounds(node: QuorumNode, peer: Peer): IO[Index] = {
+      val roundOne = replicate(Index.one, node, peer)
+      (2 to 3).toVector.foldLeft(roundOne) { (io, _) =>
+        io.flatMap { index =>
+          replicate(index.increment, node, peer)
+        }
+      }
+    }
+
+    def ensureLastConfigurationCommitted: IO[Unit] =
+      for {
+        currentState      <- state.get
+        configEntryOption <- context.store.configuration
+        _ <- configEntryOption match {
+          case Some(configEntry) =>
+            if currentState.commitIndex.value >= configEntry.index then
+              IO.unit
+            else
+              IO.sleep(1.seconds) >> ensureLastConfigurationCommitted
+          case None =>
+            IO.unit
+        }
+      } yield ()
+
+    def commit(node: QuorumNode): IO[Unit] =
+      for {
+        currentState <- state.get
+        lastOption   <- context.store.last
+        last = lastOption.getOrElse(LogEntry.defaultInstance)
+        entry = LogEntry(
+          index = last.index + 1L,
+          term = currentState.localState.currentTerm,
+          tag = LogEntryTag.Conf,
+          data = node.toByteString,
+        )
+        _ <- context.store.append(entry)
+        _ <- ensureLastConfigurationCommitted
+      } yield ()
+
+    val run = for {
+      currentState <- state.get
+      node <-
+        request.node
+          .required(NodeError.ValueError(s"$prefix missing node in add server request"))
+      peer <-
+        node.peer
+          .required(NodeError.ValueError(s"$prefix missing peer in add server request"))
+      replicated <-
+        rounds(node, peer)
+      response <-
+        if replicated == currentState.commitIndex then
+          for {
+            _ <- ensureLastConfigurationCommitted
+            _ <- commit(node)
+            response = AddServerResponse(
+              status = AddServerResponse.Status.OK,
+              leaderHint = quorumNode.some,
+            )
+          } yield response
+        else
+          AddServerResponse(
+            status = AddServerResponse.Status.Timeout,
+            leaderHint = quorumNode.some,
+          ).pure[IO]
+    } yield response
+
+    run
+      .timeout(3.seconds)
+      .flatMap { response =>
+        if response.status == AddServerResponse.Status.OK then
+          for {
+            currentState <- state.get
+            _ <- context.events.offer(
+              Event.NodeStateChanged(
+                oldState = currentState,
+                newState = currentState,
+                reason = StateTransitionReason.ConfigurationChanged,
+              )
+            )
+          } yield response
+        else response.pure[IO]
+      }
+      .recover { _ =>
+        AddServerResponse(
+          status = AddServerResponse.Status.Timeout,
+          leaderHint = quorumNode.some,
+        )
+      }
+
+  }
+
 }
 
 object LeaderNode {

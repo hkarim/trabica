@@ -2,7 +2,7 @@ lazy val commonScalaOptions = List(
   "-deprecation",
   "-encoding",
   "utf-8",
-  "-explaintypes",
+  //"-explaintypes",
   "-feature",
   "-no-indent",
   "-Xfatal-warnings",

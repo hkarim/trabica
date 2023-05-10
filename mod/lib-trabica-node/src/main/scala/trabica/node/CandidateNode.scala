@@ -217,6 +217,12 @@ class CandidateNode(
           )
         } else IO.unit
     } yield false
+    
+  override def addServer(request: AddServerRequest): IO[AddServerResponse] =
+    AddServerResponse(
+      status = AddServerResponse.Status.NotLeader,
+      leaderHint = None,
+    ).pure[IO]
 
 }
 

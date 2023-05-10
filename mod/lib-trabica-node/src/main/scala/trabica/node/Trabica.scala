@@ -174,6 +174,14 @@ class Trabica(
       )
     } yield response
 
+  override def addServer(request: AddServerRequest): IO[AddServerResponse] =
+    for {
+      server <- ref.get
+      response <- server.addServer(request)
+    } yield response
+
+  override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] = ???
+
 }
 
 object Trabica {
