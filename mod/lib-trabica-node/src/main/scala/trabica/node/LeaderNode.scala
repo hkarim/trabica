@@ -86,9 +86,8 @@ class LeaderNode(
       .drain
 
   private def replicate(clients: Vector[NodeApi]): IO[Unit] =
-    Stream(clients)
-      .map(Chunk.vector)
-      .unchunks
+    Stream
+      .iterable(clients)
       .parEvalMapUnorderedUnbounded(replicationStream)
       .compile
       .drain
