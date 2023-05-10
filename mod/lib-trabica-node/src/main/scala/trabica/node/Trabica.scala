@@ -62,12 +62,12 @@ class Trabica(
         _ <- logger.debug(s"$loggingPrefix starting node transition")
         spawned <- mutex.lock.surround {
           for {
-            s       <- newNode.state.get
-            _       <- logger.debug(s"$loggingPrefix writing persistent state to disk")
-            _       <- context.store.writeState(s.localState)
-            _       <- logger.debug(s"$loggingPrefix starting")
-            spawned <- newNode.run
-          } yield spawned
+            s <- newNode.state.get
+            _ <- logger.debug(s"$loggingPrefix writing persistent state to disk")
+            _ <- context.store.writeState(s.localState)
+            _ <- logger.debug(s"$loggingPrefix starting")
+            r <- newNode.run
+          } yield r
         }
       } yield spawned
       (newNode, io)
@@ -112,48 +112,56 @@ class Trabica(
       _ <- startup(n, s, l)
     } yield ()
 
-  override def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse] =
+  override def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse] = {
+    def makeResponse(header: Header, success: Boolean): AppendEntriesResponse =
+      AppendEntriesResponse(
+        header = header.some,
+        success = success,
+      )
+
     for {
       server        <- ref.get
       currentState  <- server.state.get
       requestHeader <- request.header.required(NodeError.InvalidMessage)
       outdated = requestHeader.term > currentState.localState.currentTerm
-      responseHeader <- server.makeHeader
       response <-
         if outdated && currentState.tag == NodeStateTag.Follower then {
+          // higher term detected, current state is follower
+          // update the term and proceed normally
           val ls       = currentState.localState.copy(currentTerm = requestHeader.term)
           val newState = currentState.updated(ls)(using server.lens)
           for {
             _ <- server.state.set(newState)
             _ <- context.store.writeState(ls)
             s <- server.appendEntries(request)
-            r = AppendEntriesResponse(
-              header = responseHeader.some,
-              success = s,
-            )
+            h <- server.makeHeader
+            r = makeResponse(h, s)
           } yield r
         } else if outdated && currentState.tag != NodeStateTag.Follower then {
+          // higher term detected, current state is not follower
+          // convert to follower and restart operations
+          // response with failure and don't append the entry for now
           val followerState = server.makeFollowerState(currentState, requestHeader.term)
-          val r = AppendEntriesResponse(
-            header = responseHeader.some,
-            success = false,
-          )
           val event = Event.NodeStateChanged(
             oldState = currentState,
             newState = followerState,
             reason = StateTransitionReason.HigherTermDiscovered,
           )
-          context.events.offer(event) >> IO.pure(r)
+          for {
+            h <- server.makeHeader
+            r = makeResponse(h, false)
+            _ <- context.events.offer(event)
+          } yield r
         } else {
+          // term is OK, proceed normally
           for {
             success <- server.appendEntries(request)
-            r = AppendEntriesResponse(
-              header = responseHeader.some,
-              success = success,
-            )
+            h       <- server.makeHeader
+            r = makeResponse(h, success)
           } yield r
         }
     } yield response
+  }
 
   override def vote(request: VoteRequest): IO[VoteResponse] =
     for {

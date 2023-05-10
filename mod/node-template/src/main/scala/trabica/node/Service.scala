@@ -56,6 +56,5 @@ object Service
           } yield ExitCode.Success
         }
       }
-
     }
 }
