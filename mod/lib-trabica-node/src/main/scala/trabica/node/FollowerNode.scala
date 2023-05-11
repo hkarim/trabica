@@ -194,7 +194,7 @@ class FollowerNode(
         // if one of the entries is a config entry and it is committed
         // we need to reload
         if response then
-          request.entries.find(_.tag == LogEntryTag.Conf) match {
+          request.entries.filter(_.tag == LogEntryTag.Conf).lastOption match {
             case Some(configEntry) =>
               for {
                 currentState <- state.get

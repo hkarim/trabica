@@ -51,6 +51,14 @@ class Trabica(
       .compile
       .drain
 
+  def shutdown: IO[Unit] =
+    for {
+      _      <- logger.info(s"[trabica] shutting down")
+      server <- ref.get
+      _      <- server.interrupt
+      _      <- shutdownSignal.complete(Right(()))
+    } yield ()
+
   private def startup[S <: NodeState](
     newNode: Node[S],
     signal: Interrupt,
@@ -144,9 +152,9 @@ class Trabica(
           // response with failure and don't append the entry for now
           val followerState =
             server.makeFollowerState(
-              currentState,
-              requestHeader.term,
-              requestHeader.node,
+              currentState = currentState,
+              term = requestHeader.term,
+              leader = requestHeader.node,
             )
           val event = Event.NodeStateChanged(
             oldState = currentState,

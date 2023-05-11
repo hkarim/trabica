@@ -197,9 +197,9 @@ class LeaderNode(
           _ <-
             if header.term > currentState.localState.currentTerm then {
               val newState = makeFollowerState(
-                currentState,
-                header.term,
-                header.node,
+                currentState = currentState,
+                term = header.term,
+                leader = header.node,
               )
               context.events.offer(
                 Event.NodeStateChanged(
