@@ -225,6 +225,12 @@ class CandidateNode(
       leaderHint = None,
     ).pure[IO]
 
+  override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] =
+    RemoveServerResponse(
+      status = RemoveServerResponse.Status.NotLeader,
+      leaderHint = None,
+    ).pure[IO]
+
 }
 
 object CandidateNode {

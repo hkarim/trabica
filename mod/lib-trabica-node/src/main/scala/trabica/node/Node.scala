@@ -65,6 +65,8 @@ trait Node[S <: NodeState] {
     } yield result
 
   def addServer(request: AddServerRequest): IO[AddServerResponse]
+  
+  def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse]
 
   def quorumNode: QuorumNode =
     QuorumNode(id = context.quorumId, peer = context.quorumPeer.some)

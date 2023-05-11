@@ -268,6 +268,75 @@ class LeaderNode(
             tryAddServer(node, peer)
     } yield response
 
+  override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] =
+    for {
+      peers <- quorumPeers
+      node <- request.node
+        .required(NodeError.ValueError(s"$prefix missing node in add server request"))
+      peer <- node.peer
+        .required(NodeError.ValueError(s"$prefix missing peer in add server request"))
+      response <-
+        if !(peers.contains(peer) || peer.some == quorumNode.peer) then
+          logger.debug(s"$prefix peer ${peer.show} doesn't exist") >>
+            RemoveServerResponse(
+              status = RemoveServerResponse.Status.OK,
+              leaderHint = quorumNode.some,
+            ).pure[IO]
+        else
+          logger.debug(s"$prefix peer ${peer.show} exists, attempt to remove it") >>
+            tryRemoveServer(node)
+    } yield response
+
+  private def ensureLastConfigurationCommitted: IO[Unit] =
+    for {
+      currentState      <- state.get
+      configEntryOption <- context.store.configuration
+      _ <- configEntryOption match {
+        case Some(configEntry) =>
+          if currentState.commitIndex.value >= configEntry.index then
+            IO.unit
+          else
+            IO.sleep(1.seconds) >> ensureLastConfigurationCommitted
+        case None =>
+          IO.unit
+      }
+    } yield ()
+
+  private def ensureConfigurationCommitted(prevLogIndex: Long, prevLogTerm: Long, nextLogEntry: LogEntry): IO[Unit] =
+    for {
+      currentState      <- state.get
+      configEntryOption <- context.store.configuration
+      _ <- configEntryOption match {
+        case Some(configEntry) =>
+          if currentState.commitIndex.value >= configEntry.index then
+            IO.unit
+          else
+            for {
+              _ <-
+                clients.use { cs =>
+                  cs.parTraverse { c =>
+                    sendAppendEntriesRequest(
+                      c,
+                      currentState,
+                      prevLogIndex,
+                      prevLogTerm,
+                      nextLogEntry
+                    )
+                  }
+                }
+              _ <- ensureConfigurationCommitted(
+                prevLogIndex,
+                prevLogTerm,
+                nextLogEntry
+              )
+
+            } yield ()
+
+        case None =>
+          IO.unit
+      }
+    } yield ()
+
   private def tryAddServer(node: QuorumNode, peer: Peer): IO[AddServerResponse] = {
     def stream(client: NodeApi, fromIndex: Index): IO[Index] =
       context.store
@@ -327,60 +396,6 @@ class LeaderNode(
         }
       }
     }
-
-    def ensureLastConfigurationCommitted: IO[Unit] =
-      for {
-        currentState      <- state.get
-        configEntryOption <- context.store.configuration
-        _ <- configEntryOption match {
-          case Some(configEntry) =>
-            if currentState.commitIndex.value >= configEntry.index then
-              IO.unit
-            else
-              IO.sleep(1.seconds) >> ensureLastConfigurationCommitted
-          case None =>
-            IO.unit
-        }
-      } yield ()
-
-    def ensureConfigurationCommitted(
-      prevLogIndex: Long,
-      prevLogTerm: Long,
-      nextLogEntry: LogEntry
-    ): IO[Unit] =
-      for {
-        currentState      <- state.get
-        configEntryOption <- context.store.configuration
-        _ <- configEntryOption match {
-          case Some(configEntry) =>
-            if currentState.commitIndex.value >= configEntry.index then
-              IO.unit
-            else
-              for {
-                _ <-
-                  clients.use { cs =>
-                    cs.parTraverse { c =>
-                      sendAppendEntriesRequest(
-                        c,
-                        currentState,
-                        prevLogIndex,
-                        prevLogTerm,
-                        nextLogEntry
-                      )
-                    }
-                  }
-                _ <- ensureConfigurationCommitted(
-                  prevLogIndex,
-                  prevLogTerm,
-                  nextLogEntry
-                )
-
-              } yield ()
-
-          case None =>
-            IO.unit
-        }
-      } yield ()
 
     def commit: IO[Unit] =
       for {
@@ -461,6 +476,67 @@ class LeaderNode(
       }
   }
 
+  private def tryRemoveServer(node: QuorumNode): IO[RemoveServerResponse] = {
+    def commit: IO[Unit] =
+      for {
+        currentState <- state.get
+        lastOption   <- context.store.last
+        last = lastOption.getOrElse(LogEntry.defaultInstance)
+        q <- quorum
+        newQuorum = q.copy(nodes = q.nodes.toVector.filterNot(_ == node))
+        entry = LogEntry(
+          index = last.index + 1L,
+          term = currentState.localState.currentTerm,
+          tag = LogEntryTag.Conf,
+          data = newQuorum.toByteString,
+        )
+        r <- context.store.append(entry)
+        _ <-
+          if r == AppendResult.Appended then
+            ensureConfigurationCommitted(last.index, last.term, entry)
+          else
+            commit
+      } yield ()
+
+    val run = for {
+      currentState <- state.get
+      _ <- logger.debug(
+        s"$prefix [remove-server::initial-state] commitIndex: ${currentState.commitIndex}",
+        s"$prefix [remove-server::initial-state] matchIndex: ${currentState.matchIndex.show}",
+      )
+      _ <- logger.debug(s"$prefix [remove-server] invoking ensureLastConfigurationCommitted")
+      _ <- ensureLastConfigurationCommitted
+      _ <- logger.debug(s"$prefix [add-server] invoking commit")
+      _ <- commit
+      _ <- logger.debug(s"$prefix [add-server] returning response")
+      response = RemoveServerResponse(
+        status = RemoveServerResponse.Status.OK,
+        leaderHint = quorumNode.some,
+      )
+    } yield response
+
+    run
+      .flatMap { response =>
+        if response.status == RemoveServerResponse.Status.OK then
+          for {
+            currentState <- state.get
+            _ <- context.events.offer(
+              Event.NodeStateChanged(
+                oldState = currentState,
+                // step down
+                newState = makeFollowerState(
+                  currentState,
+                  currentState.localState.currentTerm,
+                  None
+                ),
+                reason = StateTransitionReason.ConfigurationChanged,
+              )
+            )
+          } yield response
+        else response.pure[IO]
+      }
+
+  }
 }
 
 object LeaderNode {

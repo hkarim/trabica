@@ -43,6 +43,18 @@ class Trabica(
     Stream
       .fromQueueUnterminated(context.events)
       .evalMap {
+        case Event.NodeStateChanged(oldState, newState, StateTransitionReason.ConfigurationChanged) =>
+          for {
+            c    <- context.store.configuration
+            conf <- c.required(NodeError.ValueError("[event] configuration does not exit"))
+            q    <- IO.delay(Quorum.parseFrom(conf.data.newCodedInput()))
+            n    <- newState.localState.node.required(NodeError.ValueError("[event] invalid transition state"))
+            _ <-
+              if q.nodes.toVector.contains(n) then
+                transition(oldState, newState, StateTransitionReason.ConfigurationChanged)
+              else
+                ref.get.flatMap(_.interrupt)
+          } yield ()
         case Event.NodeStateChanged(oldState, newState, reason) =>
           logger.debug(s"[event] node state changed, transitioning") >>
             transition(oldState, newState, reason)
@@ -186,7 +198,16 @@ class Trabica(
       _ <- logger.debug(s"[trabica::addServer] response: $response")
     } yield response
 
-  override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] = ???
+  override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] =
+    for {
+      _      <- logger.info(s"[trabica] attempt to remove a server")
+      server <- ref.get
+      response <-
+        mutex.lock.surround {
+          server.removeServer(request)
+        }
+      _ <- logger.debug(s"[trabica::removeServer] response: $response")
+    } yield response
 
 }
 

@@ -233,6 +233,16 @@ class FollowerNode(
         )
     } yield response
 
+  override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] =
+    for {
+      currentState <- state.get
+      response =
+        RemoveServerResponse(
+          status = RemoveServerResponse.Status.NotLeader,
+          leaderHint = currentState.leader,
+        )
+    } yield response
+
 }
 
 object FollowerNode {
