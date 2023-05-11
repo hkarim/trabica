@@ -11,6 +11,7 @@ sealed trait NodeState { self =>
   def commitIndex: Index
   def lastApplied: Index
   def tag: NodeStateTag
+  def leader: Option[QuorumNode]
 }
 
 object NodeState {
@@ -19,6 +20,7 @@ object NodeState {
     localState: LocalState,
     commitIndex: Index,
     lastApplied: Index,
+    leader: Option[QuorumNode],
   ) extends NodeState {
     override val tag: NodeStateTag = NodeStateTag.Follower
   }
@@ -29,6 +31,7 @@ object NodeState {
     lastApplied: Index,
     votes: Set[QuorumNode],
     elected: Boolean,
+    leader: Option[QuorumNode],
   ) extends NodeState {
     override val tag: NodeStateTag = NodeStateTag.Candidate
   }
@@ -41,6 +44,7 @@ object NodeState {
     matchIndex: Map[Peer, Index],
   ) extends NodeState {
     override val tag: NodeStateTag = NodeStateTag.Leader
+    override val leader: Option[QuorumNode] = localState.node
   }
 
 }

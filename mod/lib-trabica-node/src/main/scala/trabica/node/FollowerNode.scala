@@ -108,6 +108,7 @@ class FollowerNode(
         lastApplied = currentState.lastApplied,
         votes = Set(qn),
         elected = false,
+        leader = None,
       )
       _ <- context.events.offer(
         Event.NodeStateChanged(
@@ -143,48 +144,49 @@ class FollowerNode(
       results <-
         if check then {
           request.entries.toVector.traverse { entry =>
-            context.store.append(entry).flatMap {
-              case AppendResult.IndexExistsWithTermConflict(storeTerm, incomingTerm) =>
-                val message =
+            state.set(currentState.copy(leader = header.node)) >> // update the current leader
+              context.store.append(entry).flatMap {
+                case AppendResult.IndexExistsWithTermConflict(storeTerm, incomingTerm) =>
+                  val message =
+                    logger.debug(
+                      s"$prefix failed to append entry - IndexExistsWithTermConflict",
+                      s"incoming entry $entry",
+                      s"storeTerm: $storeTerm, incomingTerm: $incomingTerm"
+                    )
+                  for {
+                    _ <- message
+                    _ <- logger.debug(s"$prefix truncating up to and including ${entry.index}")
+                    _ <- context.store.truncate(upToIncluding = Index.of(entry.index))
+                    _ <- logger.debug(s"$prefix appending entry at ${entry.index}")
+                    r <- context.store.append(entry)
+                    _ <- logger.debug(s"$prefix append result $r")
+                    _ <-
+                      if r == AppendResult.Appended then
+                        updateCommitIndex(request.commitIndex, entry.index)
+                      else IO.unit
+                  } yield r == AppendResult.Appended
+                case AppendResult.HigherTermExists(storeTerm, incomingTerm) =>
                   logger.debug(
-                    s"$prefix failed to append entry - IndexExistsWithTermConflict",
+                    s"$prefix failed to append entry - HigherTermExists",
                     s"incoming entry $entry",
                     s"storeTerm: $storeTerm, incomingTerm: $incomingTerm"
-                  )
-                for {
-                  _ <- message
-                  _ <- logger.debug(s"$prefix truncating up to and including ${entry.index}")
-                  _ <- context.store.truncate(upToIncluding = Index.of(entry.index))
-                  _ <- logger.debug(s"$prefix appending entry at ${entry.index}")
-                  r <- context.store.append(entry)
-                  _ <- logger.debug(s"$prefix append result $r")
-                  _ <-
-                    if r == AppendResult.Appended then
-                      updateCommitIndex(request.commitIndex, entry.index)
-                    else IO.unit
-                } yield r == AppendResult.Appended
-              case AppendResult.HigherTermExists(storeTerm, incomingTerm) =>
-                logger.debug(
-                  s"$prefix failed to append entry - HigherTermExists",
-                  s"incoming entry $entry",
-                  s"storeTerm: $storeTerm, incomingTerm: $incomingTerm"
-                ) >> IO.pure(false)
-              case AppendResult.NonMonotonicIndex(storeIndex, incomingIndex) =>
-                logger.debug(
-                  s"$prefix failed to append entry - NonMonotonicIndex",
-                  s"incoming entry $entry",
-                  s"storeIndex: $storeIndex, incomingIndex: $incomingIndex"
-                ) >> IO.pure(false)
-              case AppendResult.IndexExists =>
-                logger.debug(
-                  s"$prefix appending entry: IndexExists",
-                ) >> IO.pure(true)
-              case AppendResult.Appended =>
-                for {
-                  _ <- logger.debug(s"$prefix appending entry: Appended")
-                  _ <- updateCommitIndex(request.commitIndex, entry.index)
-                } yield true
-            }
+                  ) >> IO.pure(false)
+                case AppendResult.NonMonotonicIndex(storeIndex, incomingIndex) =>
+                  logger.debug(
+                    s"$prefix failed to append entry - NonMonotonicIndex",
+                    s"incoming entry $entry",
+                    s"storeIndex: $storeIndex, incomingIndex: $incomingIndex"
+                  ) >> IO.pure(false)
+                case AppendResult.IndexExists =>
+                  logger.debug(
+                    s"$prefix appending entry: IndexExists",
+                  ) >> IO.pure(true)
+                case AppendResult.Appended =>
+                  for {
+                    _ <- logger.debug(s"$prefix appending entry: Appended")
+                    _ <- updateCommitIndex(request.commitIndex, entry.index)
+                  } yield true
+              }
           }
         } else IO.pure(Vector(false))
       response = results.forall(identity)
@@ -222,10 +224,14 @@ class FollowerNode(
     }
 
   override def addServer(request: AddServerRequest): IO[AddServerResponse] =
-    AddServerResponse(
-      status = AddServerResponse.Status.NotLeader,
-      leaderHint = None,
-    ).pure[IO]
+    for {
+      currentState <- state.get
+      response =
+        AddServerResponse(
+          status = AddServerResponse.Status.NotLeader,
+          leaderHint = currentState.leader,
+        )
+    } yield response
 
 }
 

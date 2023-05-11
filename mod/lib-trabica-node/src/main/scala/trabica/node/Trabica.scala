@@ -141,7 +141,8 @@ class Trabica(
           // higher term detected, current state is not follower
           // convert to follower and restart operations
           // response with failure and don't append the entry for now
-          val followerState = server.makeFollowerState(currentState, requestHeader.term)
+          val followerState =
+            server.makeFollowerState(currentState, requestHeader.term, requestHeader.node)
           val event = Event.NodeStateChanged(
             oldState = currentState,
             newState = followerState,

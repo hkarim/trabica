@@ -25,7 +25,7 @@ class CandidateNode(
   private final val id: Int = trace.candidateId
 
   override final val prefix: String = s"[candidate-$id]"
-  
+
   private final val voteStreamRate: Long =
     context.config.getLong("trabica.candidate.vote-stream.rate")
 
@@ -185,7 +185,8 @@ class CandidateNode(
           currentState <- state.get
           _ <-
             if header.term > currentState.localState.currentTerm then {
-              val followerState = makeFollowerState(currentState, header.term)
+              val followerState =
+                makeFollowerState(currentState, header.term, header.node)
               context.events.offer(
                 Event.NodeStateChanged(
                   oldState = currentState,
@@ -207,7 +208,7 @@ class CandidateNode(
       _ <-
         if currentState.localState.currentTerm <= header.term then {
           // a leader has been elected other than this candidate, change state to follower
-          val newState = makeFollowerState(currentState, header.term)
+          val newState = makeFollowerState(currentState, header.term, header.node)
           context.events.offer(
             Event.NodeStateChanged(
               oldState = currentState,
@@ -217,7 +218,7 @@ class CandidateNode(
           )
         } else IO.unit
     } yield false
-    
+
   override def addServer(request: AddServerRequest): IO[AddServerResponse] =
     AddServerResponse(
       status = AddServerResponse.Status.NotLeader,

@@ -63,7 +63,7 @@ trait Node[S <: NodeState] {
             } yield voteGranted
         }
     } yield result
-    
+
   def addServer(request: AddServerRequest): IO[AddServerResponse]
 
   def quorumNode: QuorumNode =
@@ -90,7 +90,7 @@ trait Node[S <: NodeState] {
       )
     } yield h
 
-  def makeFollowerState(currentState: NodeState, term: Long): NodeState.Follower =
+  def makeFollowerState(currentState: NodeState, term: Long, leader: Option[QuorumNode]): NodeState.Follower =
     NodeState.Follower(
       localState = LocalState(
         node = QuorumNode(id = context.quorumId, peer = Some(context.quorumPeer)).some,
@@ -99,6 +99,7 @@ trait Node[S <: NodeState] {
       ),
       commitIndex = currentState.commitIndex,
       lastApplied = currentState.lastApplied,
+      leader = leader,
     )
 
   def quorum: IO[Quorum] =
@@ -192,6 +193,7 @@ object Node {
         localState = localState,
         commitIndex = Index.one,
         lastApplied = Index.one,
+        leader = None,
       )
     } yield nodeState
   }
@@ -220,6 +222,7 @@ object Node {
         localState = localState,
         commitIndex = index,
         lastApplied = index,
+        leader = None,
       )
     } yield nodeState
 
