@@ -13,6 +13,7 @@ class Trabica(
   val context: NodeContext,
   val ref: Ref[IO, Node[_ <: NodeState]],
   val mutex: Mutex[IO],
+  val shutdownSignal: Interrupt,
   val trace: Ref[IO, NodeTrace],
 ) extends NodeApi {
 
@@ -43,18 +44,6 @@ class Trabica(
     Stream
       .fromQueueUnterminated(context.events)
       .evalMap {
-        case Event.NodeStateChanged(oldState, newState, StateTransitionReason.ConfigurationChanged) =>
-          for {
-            c    <- context.store.configuration
-            conf <- c.required(NodeError.ValueError("[event] configuration does not exit"))
-            q    <- IO.delay(Quorum.parseFrom(conf.data.newCodedInput()))
-            n    <- newState.localState.node.required(NodeError.ValueError("[event] invalid transition state"))
-            _ <-
-              if q.nodes.toVector.contains(n) then
-                transition(oldState, newState, StateTransitionReason.ConfigurationChanged)
-              else
-                ref.get.flatMap(_.interrupt)
-          } yield ()
         case Event.NodeStateChanged(oldState, newState, reason) =>
           logger.debug(s"[event] node state changed, transitioning") >>
             transition(oldState, newState, reason)
@@ -154,7 +143,11 @@ class Trabica(
           // convert to follower and restart operations
           // response with failure and don't append the entry for now
           val followerState =
-            server.makeFollowerState(currentState, requestHeader.term, requestHeader.node)
+            server.makeFollowerState(
+              currentState,
+              requestHeader.term,
+              requestHeader.node,
+            )
           val event = Event.NodeStateChanged(
             oldState = currentState,
             newState = followerState,
@@ -246,15 +239,18 @@ object Trabica {
         quorumId = quorumNode.id,
         quorumPeer = quorumPeer,
       )
-      trace <- Ref.of[IO, NodeTrace](NodeTrace.instance)
-      node  <- Node.instance(context, trace, state)
-      ref   <- Ref.of[IO, Node[_ <: NodeState]](node)
-      mutex <- Mutex[IO]
-      trabica = new Trabica(context, ref, mutex, trace)
+      trace          <- Ref.of[IO, NodeTrace](NodeTrace.instance)
+      node           <- Node.instance(context, trace, state)
+      ref            <- Ref.of[IO, Node[_ <: NodeState]](node)
+      mutex          <- Mutex[IO]
+      shutdownSignal <- Interrupt.instance
+      trabica = new Trabica(context, ref, mutex, shutdownSignal, trace)
       _ <- node.run.supervise(supervisor)
       _ <- logger.info(s"starting up in mode follower")
       _ <- trabica.run.supervise(supervisor)
-      _ <- networking.server(trabica, quorumPeer.host, quorumPeer.port).useForever
+      _ <- networking.server(trabica, quorumPeer.host, quorumPeer.port).use { _ =>
+        shutdownSignal.get
+      }
     } yield ()
 
 }

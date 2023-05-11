@@ -196,7 +196,11 @@ class LeaderNode(
           header       <- r.header.required
           _ <-
             if header.term > currentState.localState.currentTerm then {
-              val newState = makeFollowerState(currentState, header.term, header.node)
+              val newState = makeFollowerState(
+                currentState,
+                header.term,
+                header.node,
+              )
               context.events.offer(
                 Event.NodeStateChanged(
                   oldState = currentState,
@@ -468,11 +472,12 @@ class LeaderNode(
           } yield response
         else response.pure[IO]
       }
-      .recover { _ =>
-        AddServerResponse(
-          status = AddServerResponse.Status.Timeout,
-          leaderHint = quorumNode.some,
-        )
+      .handleErrorWith { e =>
+        logger.debug(s"$prefix add server error: ${e.getMessage}", e) >>
+          AddServerResponse(
+            status = AddServerResponse.Status.Timeout,
+            leaderHint = quorumNode.some,
+          ).pure[IO]
       }
   }
 
@@ -525,9 +530,9 @@ class LeaderNode(
                 oldState = currentState,
                 // step down
                 newState = makeFollowerState(
-                  currentState,
-                  currentState.localState.currentTerm,
-                  None
+                  currentState = currentState,
+                  term = currentState.localState.currentTerm,
+                  leader = None,
                 ),
                 reason = StateTransitionReason.ConfigurationChanged,
               )

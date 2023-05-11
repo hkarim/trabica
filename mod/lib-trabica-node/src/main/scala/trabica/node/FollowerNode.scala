@@ -131,7 +131,7 @@ class FollowerNode(
       _ <-
         if request.entries.nonEmpty then
           logger.debug(
-            s"$prefix",
+            s"$prefix append-entries",
             s"currentTerm: ${currentState.localState.currentTerm}",
             s"requestTerm: ${header.term}",
             s"termOk: $termOK",
@@ -199,7 +199,7 @@ class FollowerNode(
               for {
                 currentState <- state.get
                 _ <-
-                  if currentState.commitIndex.value >= configEntry.index then
+                  if currentState.commitIndex.value >= configEntry.index then {
                     context.events.offer(
                       Event.NodeStateChanged(
                         oldState = currentState,
@@ -207,7 +207,7 @@ class FollowerNode(
                         reason = StateTransitionReason.ConfigurationChanged
                       )
                     )
-                  else IO.unit
+                  } else IO.unit
               } yield ()
             case None =>
               IO.unit

@@ -43,7 +43,7 @@ object NodeState {
     nextIndex: Map[Peer, Index],
     matchIndex: Map[Peer, Index],
   ) extends NodeState {
-    override val tag: NodeStateTag = NodeStateTag.Leader
+    override val tag: NodeStateTag          = NodeStateTag.Leader
     override val leader: Option[QuorumNode] = localState.node
   }
 

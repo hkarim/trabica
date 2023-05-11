@@ -186,7 +186,11 @@ class CandidateNode(
           _ <-
             if header.term > currentState.localState.currentTerm then {
               val followerState =
-                makeFollowerState(currentState, header.term, header.node)
+                makeFollowerState(
+                  currentState,
+                  header.term,
+                  header.node,
+                )
               context.events.offer(
                 Event.NodeStateChanged(
                   oldState = currentState,
@@ -208,7 +212,11 @@ class CandidateNode(
       _ <-
         if currentState.localState.currentTerm <= header.term then {
           // a leader has been elected other than this candidate, change state to follower
-          val newState = makeFollowerState(currentState, header.term, header.node)
+          val newState = makeFollowerState(
+            currentState,
+            header.term,
+            header.node,
+          )
           context.events.offer(
             Event.NodeStateChanged(
               oldState = currentState,
