@@ -92,3 +92,11 @@ message RemoveServerResponse {
   Status status = 1;
   optional QuorumNode leaderHint = 2;
 }
+
+message StepDownRequest {
+  Header header = 1;
+}
+
+message StepDownResponse {
+
+}

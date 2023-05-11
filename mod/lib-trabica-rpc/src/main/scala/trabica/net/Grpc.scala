@@ -19,6 +19,9 @@ object Grpc extends Networking {
 
     override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] =
       client.removeServer(request, new Metadata)
+
+    override def stepDown(request: StepDownRequest): IO[StepDownResponse] =
+      client.stepDown(request, new Metadata)
   }
 
   private class GrpcServerNodeApi(server: NodeApi) extends TrabicaFs2Grpc[IO, Metadata] {
@@ -34,6 +37,9 @@ object Grpc extends Networking {
 
     override def removeServer(request: RemoveServerRequest, ctx: Metadata): IO[RemoveServerResponse] =
       server.removeServer(request)
+
+    override def stepDown(request: StepDownRequest, ctx: Metadata): IO[StepDownResponse] =
+      server.stepDown(request)
   }
 
   override def client(prefix: String, quorumId: String, quorumPeer: trabica.model.Peer): Resource[IO, NodeApi] =

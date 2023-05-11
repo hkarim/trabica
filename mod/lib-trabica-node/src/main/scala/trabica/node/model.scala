@@ -62,6 +62,11 @@ given Show[Map[Peer, Index]] with {
     }.mkString("[", ", ", "]")
 }
 
+given Show[QuorumNode] with {
+  override def show(instance: QuorumNode): String =
+    s"${instance.id}@${instance.peer.map(_.host).getOrElse("unknown")}:${instance.peer.map(_.port).getOrElse(0)}"
+}
+
 case class NodeTrace(
   followerId: Int,
   candidateId: Int,

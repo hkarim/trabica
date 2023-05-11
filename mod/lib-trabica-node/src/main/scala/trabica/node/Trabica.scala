@@ -9,6 +9,8 @@ import trabica.model.*
 import trabica.net.{Networking, NodeApi}
 import trabica.store.FsmStore
 
+import scala.concurrent.duration.*
+
 class Trabica(
   val context: NodeContext,
   val ref: Ref[IO, Node[_ <: NodeState]],
@@ -51,13 +53,17 @@ class Trabica(
       .compile
       .drain
 
-  def shutdown: IO[Unit] =
+  def stepDown(request: StepDownRequest): IO[StepDownResponse] =
     for {
-      _      <- logger.info(s"[trabica] shutting down")
+      h      <- request.header.required
+      n      <- h.node.required(NodeError.InvalidHeader)
+      _      <- logger.info(s"[trabica] received shutdown signal from ${n.show}")
       server <- ref.get
       _      <- server.interrupt
-      _      <- shutdownSignal.complete(Right(()))
-    } yield ()
+      _ <-
+        (IO.sleep(3.seconds) >> shutdownSignal.complete(Right(())))
+          .supervise(context.supervisor)
+    } yield StepDownResponse.defaultInstance
 
   private def startup[S <: NodeState](
     newNode: Node[S],

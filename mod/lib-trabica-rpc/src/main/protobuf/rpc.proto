@@ -10,4 +10,5 @@ service Trabica {
   rpc Vote(VoteRequest) returns (VoteResponse) {}
   rpc AddServer(AddServerRequest) returns (AddServerResponse) {}
   rpc RemoveServer(RemoveServerRequest) returns (RemoveServerResponse) {}
+  rpc StepDown(StepDownRequest) returns (StepDownResponse) {}
 }

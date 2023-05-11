@@ -306,67 +306,59 @@ class LeaderNode(
       }
     } yield ()
 
-  private def ensureConfigurationCommitted(prevLogIndex: Long, prevLogTerm: Long, nextLogEntry: LogEntry): IO[Unit] =
-    for {
-      currentState      <- state.get
-      configEntryOption <- context.store.configuration
-      _ <- configEntryOption match {
-        case Some(configEntry) =>
-          if currentState.commitIndex.value >= configEntry.index then
-            IO.unit
-          else
-            for {
-              _ <-
-                clients.use { cs =>
-                  cs.parTraverse { c =>
-                    sendAppendEntriesRequest(
-                      c,
-                      currentState,
-                      prevLogIndex,
-                      prevLogTerm,
-                      nextLogEntry
-                    )
-                  }
-                }
-              _ <- ensureConfigurationCommitted(
-                prevLogIndex,
-                prevLogTerm,
-                nextLogEntry
-              )
-
-            } yield ()
-
-        case None =>
-          IO.unit
-      }
-    } yield ()
+  private def ensureEntryCommitted(prevLogIndex: Long, prevLogTerm: Long, entry: LogEntry): IO[Unit] =
+    state.get.flatMap { currentState =>
+      if currentState.commitIndex.value >= entry.index then
+        IO.unit
+      else
+        for {
+          _ <-
+            clients.use { cs =>
+              cs.parTraverse { c =>
+                sendAppendEntriesRequest(
+                  c,
+                  currentState,
+                  prevLogIndex,
+                  prevLogTerm,
+                  entry
+                )
+              }
+            }
+          _ <- ensureEntryCommitted(
+            prevLogIndex,
+            prevLogTerm,
+            entry
+          )
+        } yield ()
+    }
 
   private def tryAddServer(node: QuorumNode, peer: Peer): IO[AddServerResponse] = {
     def stream(client: NodeApi, fromIndex: Index): IO[Index] =
       context.store
         .streamFrom(fromIndex)
+        .evalTap(i => logger.debug(s"$prefix [add-server::stream] replicating index $i"))
         .interruptWhen(signal)
         .handleErrorWith(_ => Stream.empty)
-        .evalMap { entry =>
+        .zipWithPrevious
+        .evalMap { (prevOption, next) =>
           for {
             currentState <- state.get
-            prev <- context.store
-              .atIndex(Index.of(entry.index - 1))
-              .recover(_ => LogEntry.defaultInstance)
+            prev = prevOption.getOrElse(LogEntry.defaultInstance)
             h <- makeHeader(currentState)
             request = AppendEntriesRequest(
               header = h.some,
               prevLogIndex = prev.index,
               prevLogTerm = prev.term,
               commitIndex = currentState.commitIndex.value,
-              entries = Vector(entry),
+              entries = Vector(next),
             )
             responseSuccess <-
               client.appendEntries(request)
                 .map(_.success)
                 .timeout(rpcTimeout.milliseconds)
                 .recover(_ => false)
-            replicatedIndex = if responseSuccess then Index.of(entry.index) else fromIndex
+            _ <- logger.debug(s"$prefix [add-server::stream] replicate ${next.index} -> $responseSuccess")
+            replicatedIndex = if responseSuccess then Index.of(next.index) else Index.of(prev.index)
           } yield replicatedIndex
         }
         .compile
@@ -417,7 +409,7 @@ class LeaderNode(
         r <- context.store.append(entry)
         _ <-
           if r == AppendResult.Appended then
-            ensureConfigurationCommitted(last.index, last.term, entry)
+            ensureEntryCommitted(last.index, last.term, entry)
           else
             commit
       } yield ()
@@ -449,7 +441,10 @@ class LeaderNode(
             )
           } yield response
         else
-          logger.debug(s"$prefix [add-server] timeout") >>
+          logger.debug(
+            s"$prefix [add-server::response] request server reached $replicated index",
+            s"$prefix [add-server::response] request server did reach ${currentState.commitIndex} index",
+          ) >>
             AddServerResponse(
               status = AddServerResponse.Status.Timeout,
               leaderHint = quorumNode.some,
@@ -498,7 +493,7 @@ class LeaderNode(
         r <- context.store.append(entry)
         _ <-
           if r == AppendResult.Appended then
-            ensureConfigurationCommitted(last.index, last.term, entry)
+            ensureEntryCommitted(last.index, last.term, entry)
           else
             commit
       } yield ()
@@ -511,9 +506,9 @@ class LeaderNode(
       )
       _ <- logger.debug(s"$prefix [remove-server] invoking ensureLastConfigurationCommitted")
       _ <- ensureLastConfigurationCommitted
-      _ <- logger.debug(s"$prefix [add-server] invoking commit")
+      _ <- logger.debug(s"$prefix [remove-server] invoking commit")
       _ <- commit
-      _ <- logger.debug(s"$prefix [add-server] returning response")
+      _ <- logger.debug(s"$prefix [remove-server] returning response")
       response = RemoveServerResponse(
         status = RemoveServerResponse.Status.OK,
         leaderHint = quorumNode.some,
@@ -524,7 +519,15 @@ class LeaderNode(
       .flatMap { response =>
         if response.status == RemoveServerResponse.Status.OK then
           for {
-            currentState <- state.get
+            currentState  <- state.get
+            peer          <- node.peer.required(NodeError.InvalidHeader)
+            requestHeader <- makeHeader(currentState)
+            _ <- context.networking
+              .client(prefix, node.id, peer).use { c =>
+                c.stepDown(StepDownRequest.of(requestHeader.some))
+                  .timeout(rpcTimeout.milliseconds)
+                  .recover(_ => ())
+              }
             _ <- context.events.offer(
               Event.NodeStateChanged(
                 oldState = currentState,
@@ -540,7 +543,6 @@ class LeaderNode(
           } yield response
         else response.pure[IO]
       }
-
   }
 }
 
