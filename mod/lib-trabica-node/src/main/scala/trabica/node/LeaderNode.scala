@@ -7,6 +7,7 @@ import fs2.*
 import fs2.concurrent.SignallingRef
 import trabica.model.*
 import trabica.net.NodeApi
+import trabica.store.AppendResult
 
 import scala.concurrent.duration.*
 
@@ -33,6 +34,9 @@ class LeaderNode(
 
   private final val replicationStreamRate: Long =
     context.config.getLong("trabica.leader.replication-stream.rate")
+
+  private final val addServerTimeout: Long =
+    context.config.getLong("trabica.leader.add-server.timeout")
 
   override def lens: NodeStateLens[NodeState.Leader] =
     NodeStateLens[NodeState.Leader]
@@ -245,7 +249,26 @@ class LeaderNode(
       )
     } yield ()
 
-  override def addServer(request: AddServerRequest): IO[AddServerResponse] = {
+  override def addServer(request: AddServerRequest): IO[AddServerResponse] =
+    for {
+      peers <- quorumPeers
+      node <- request.node
+        .required(NodeError.ValueError(s"$prefix missing node in add server request"))
+      peer <- node.peer
+        .required(NodeError.ValueError(s"$prefix missing peer in add server request"))
+      response <-
+        if peers.contains(peer) then
+          logger.debug(s"$prefix peer ${peer.show} already exists") >>
+            AddServerResponse(
+              status = AddServerResponse.Status.OK,
+              leaderHint = quorumNode.some,
+            ).pure[IO]
+        else
+          logger.debug(s"$prefix peer ${peer.show} doesn't exist, attempt to add it") >>
+            tryAddServer(node, peer)
+    } yield response
+
+  private def tryAddServer(node: QuorumNode, peer: Peer): IO[AddServerResponse] = {
     def stream(client: NodeApi, fromIndex: Index): IO[Index] =
       context.store
         .streamFrom(fromIndex)
@@ -268,7 +291,7 @@ class LeaderNode(
             responseSuccess <-
               client.appendEntries(request)
                 .map(_.success)
-                .timeout(100.milliseconds)
+                .timeout(rpcTimeout.milliseconds)
                 .recover(_ => false)
             replicatedIndex = if responseSuccess then Index.of(entry.index) else fromIndex
           } yield replicatedIndex
@@ -278,7 +301,7 @@ class LeaderNode(
           next
         }
 
-    def replicate(fromIndex: Index, node: QuorumNode, peer: Peer): IO[Index] =
+    def replicate(fromIndex: Index): IO[Index] =
       Stream
         .resource(
           context.networking
@@ -293,11 +316,14 @@ class LeaderNode(
           next
         }
 
-    def rounds(node: QuorumNode, peer: Peer): IO[Index] = {
-      val roundOne = replicate(Index.one, node, peer)
+    def rounds(desiredIndex: Index): IO[Index] = {
+      val roundOne = replicate(Index.one)
       (2 to 3).toVector.foldLeft(roundOne) { (io, _) =>
         io.flatMap { index =>
-          replicate(index, node, peer)
+          if index == desiredIndex then
+            index.pure[IO]
+          else
+            replicate(index)
         }
       }
     }
@@ -334,10 +360,20 @@ class LeaderNode(
                 _ <-
                   clients.use { cs =>
                     cs.parTraverse { c =>
-                      sendAppendEntriesRequest(c, currentState, prevLogIndex, prevLogTerm, nextLogEntry)
+                      sendAppendEntriesRequest(
+                        c,
+                        currentState,
+                        prevLogIndex,
+                        prevLogTerm,
+                        nextLogEntry
+                      )
                     }
                   }
-                _ <- ensureConfigurationCommitted(prevLogIndex, prevLogTerm, nextLogEntry)
+                _ <- ensureConfigurationCommitted(
+                  prevLogIndex,
+                  prevLogTerm,
+                  nextLogEntry
+                )
 
               } yield ()
 
@@ -346,46 +382,48 @@ class LeaderNode(
         }
       } yield ()
 
-    def commit(node: QuorumNode): IO[Unit] =
+    def commit: IO[Unit] =
       for {
         currentState <- state.get
         lastOption   <- context.store.last
         last = lastOption.getOrElse(LogEntry.defaultInstance)
         q <- quorum
-        newQuorum = q.copy(nodes = q.nodes.appended(node))
+        newQuorum = q.copy(nodes = q.nodes.appended(node).toVector.distinct)
         entry = LogEntry(
           index = last.index + 1L,
           term = currentState.localState.currentTerm,
           tag = LogEntryTag.Conf,
           data = newQuorum.toByteString,
         )
-        _ <- context.store.append(entry)
-        _ <- ensureConfigurationCommitted(last.index, last.term, entry)
+        r <- context.store.append(entry)
+        _ <-
+          if r == AppendResult.Appended then
+            ensureConfigurationCommitted(last.index, last.term, entry)
+          else
+            commit
       } yield ()
 
     val run = for {
       currentState <- state.get
-      node <-
-        request.node
-          .required(NodeError.ValueError(s"$prefix missing node in add server request"))
-      peer <-
-        node.peer
-          .required(NodeError.ValueError(s"$prefix missing peer in add server request"))
-      replicated <-
-        rounds(node, peer)
       _ <- logger.debug(
-        s"$prefix [add-server] replicatedIndex: $replicated",
-        s"$prefix [add-server] commitIndex: ${currentState.commitIndex}",
-        s"$prefix [add-server] matchIndex: ${currentState.matchIndex.show}",
+        s"$prefix [add-server::initial-state] commitIndex: ${currentState.commitIndex}",
+        s"$prefix [add-server::initial-state] matchIndex: ${currentState.matchIndex.show}",
+      )
+      replicated <-
+        rounds(currentState.commitIndex)
+      _ <- logger.debug(
+        s"$prefix [add-server::after-rounds] replicatedIndex: $replicated",
+        s"$prefix [add-server::after-rounds] commitIndex: ${currentState.commitIndex}",
+        s"$prefix [add-server::after-rounds] matchIndex: ${currentState.matchIndex.show}",
       )
       response <-
         if replicated == currentState.commitIndex then
           for {
-            _ <- logger.debug(s"$prefix [add-server] ensureLastConfigurationCommitted")
+            _ <- logger.debug(s"$prefix [add-server] invoking ensureLastConfigurationCommitted")
             _ <- ensureLastConfigurationCommitted
-            _ <- logger.debug(s"$prefix [add-server] commit")
-            _ <- commit(node)
-            _ <- logger.debug(s"$prefix [add-server] response")
+            _ <- logger.debug(s"$prefix [add-server] invoking commit")
+            _ <- commit
+            _ <- logger.debug(s"$prefix [add-server] returning response")
             response = AddServerResponse(
               status = AddServerResponse.Status.OK,
               leaderHint = quorumNode.some,
@@ -398,9 +436,9 @@ class LeaderNode(
               leaderHint = quorumNode.some,
             ).pure[IO]
     } yield response
-    
+
     run
-      .timeout(20.seconds)
+      .timeout(addServerTimeout.milliseconds)
       .flatMap { response =>
         if response.status == AddServerResponse.Status.OK then
           for {

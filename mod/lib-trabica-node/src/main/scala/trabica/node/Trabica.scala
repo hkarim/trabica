@@ -176,11 +176,13 @@ class Trabica(
 
   override def addServer(request: AddServerRequest): IO[AddServerResponse] =
     for {
+      _      <- logger.info(s"[trabica] attempt to add a new server")
       server <- ref.get
       response <-
         mutex.lock.surround {
           server.addServer(request)
         }
+      _ <- logger.debug(s"[trabica::addServer] response: $response")
     } yield response
 
   override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] = ???
