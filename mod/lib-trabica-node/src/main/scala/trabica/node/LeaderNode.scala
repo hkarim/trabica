@@ -257,7 +257,7 @@ class LeaderNode(
       peer <- node.peer
         .required(NodeError.ValueError(s"$prefix missing peer in add server request"))
       response <-
-        if peers.contains(peer) then
+        if peers.contains(peer) || peer.some == quorumNode.peer then
           logger.debug(s"$prefix peer ${peer.show} already exists") >>
             AddServerResponse(
               status = AddServerResponse.Status.OK,
