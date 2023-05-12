@@ -80,7 +80,7 @@ class FollowerNode(
 
   private def tryTimeout: IO[Unit] =
     for {
-      peers <- quorumPeers.handleErrorWith { e =>
+      peers <- clusterPeers.handleErrorWith { e =>
         logger.debug(s"$prefix canceling timeout, no peers available: ${e.getMessage}") >>
           IO.pure(Vector.empty)
       }
@@ -94,10 +94,10 @@ class FollowerNode(
     for {
       _            <- logger.debug(s"$prefix heartbeat stream timed out")
       currentState <- state.get
-      peers        <- quorumPeers
+      peers        <- clusterPeers
       _            <- logger.debug(s"$prefix switching to candidate, ${peers.size} peer(s) known")
       newTerm = currentState.localState.currentTerm + 1
-      qn      = quorumNode
+      qn      = member
       newState = NodeState.Candidate(
         localState = LocalState(
           node = qn.some,

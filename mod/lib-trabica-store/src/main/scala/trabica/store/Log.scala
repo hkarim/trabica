@@ -4,7 +4,7 @@ import cats.effect.*
 import fs2.*
 import trabica.model.*
 
-trait FsmStore {
+trait Log {
   def bootstrap: IO[Unit]
   def configuration: IO[Option[LogEntry]]
   def readState: IO[Option[LocalState]]

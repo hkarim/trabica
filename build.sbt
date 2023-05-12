@@ -131,7 +131,7 @@ lazy val `lib-trabica-node` = project
   .dependsOn(`lib-trabica-store`)
 
 lazy val `node-template` = project
-  .in(file("mod/node-template"))
+  .in(file("opt/node-template"))
   .settings(
     name := "node-template"
   )
@@ -139,9 +139,6 @@ lazy val `node-template` = project
   .enablePlugins(GraalVMNativeImagePlugin)
   .settings(commonSettings)
   .settings(scalacOptions ++= fullScalaOptions)
-  .settings(
-    name := "node-template",
-  )
   .settings(
     graalVMNativeImageOptions ++= List(
       "--no-fallback",

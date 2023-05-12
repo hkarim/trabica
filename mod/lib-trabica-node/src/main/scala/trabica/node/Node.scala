@@ -5,7 +5,7 @@ import cats.syntax.all.*
 import scribe.Scribe
 import trabica.model.*
 import trabica.net.NodeApi
-import trabica.store.FsmStore
+import trabica.store.Log
 
 trait Node[S <: NodeState] {
 
@@ -68,15 +68,15 @@ trait Node[S <: NodeState] {
 
   def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse]
 
-  def quorumNode: QuorumNode =
-    QuorumNode(id = context.quorumId, peer = context.quorumPeer.some)
+  def member: Member =
+    Member(id = context.quorumId, peer = context.quorumPeer.some)
 
   def makeHeader: IO[Header] =
     for {
       messageId    <- context.messageId.getAndUpdate(_.increment)
       currentState <- state.get
       h = Header(
-        node = Some(quorumNode),
+        node = Some(member),
         messageId = messageId.value,
         term = currentState.localState.currentTerm,
       )
@@ -86,16 +86,16 @@ trait Node[S <: NodeState] {
     for {
       messageId <- context.messageId.getAndUpdate(_.increment)
       h = Header(
-        node = Some(quorumNode),
+        node = Some(member),
         messageId = messageId.value,
         term = state.localState.currentTerm,
       )
     } yield h
 
-  def makeFollowerState(currentState: NodeState, term: Long, leader: Option[QuorumNode]): NodeState.Follower =
+  def makeFollowerState(currentState: NodeState, term: Long, leader: Option[Member]): NodeState.Follower =
     NodeState.Follower(
       localState = LocalState(
-        node = QuorumNode(id = context.quorumId, peer = Some(context.quorumPeer)).some,
+        node = Member(id = context.quorumId, peer = Some(context.quorumPeer)).some,
         currentTerm = term,
         votedFor = None,
       ),
@@ -104,28 +104,28 @@ trait Node[S <: NodeState] {
       leader = leader,
     )
 
-  def quorum: IO[Quorum] =
+  def cluster: IO[Cluster] =
     for {
       co <- context.store.configuration
       c <- co.required(
         NodeError.StoreError(s"$prefix configuration entry not found")
       )
-      qo <- c.quorum
+      qo <- c.cluster
       q <- qo.required(
         NodeError.StoreError(s"$prefix quorum not found in latest configuration")
       )
     } yield q
 
-  def quorumPeers: IO[Vector[Peer]] =
+  def clusterPeers: IO[Vector[Peer]] =
     for {
-      q <- quorum
+      q <- cluster
       ns = q.nodes.toVector.filterNot(_.id == context.quorumId)
       ps <- ns.traverse(n => n.peer.required(NodeError.StoreError("peers not found")))
     } yield ps
 
   def clients: Resource[IO, Vector[NodeApi]] =
     for {
-      q <- Resource.eval(quorum)
+      q <- Resource.eval(cluster)
       ns = q.nodes.toVector.filterNot(_.id == context.quorumId)
       clients <- ns.traverse { n =>
         for {
@@ -163,7 +163,7 @@ object Node {
       n <- FollowerNode.instance(context, r, signal, t)
     } yield n
 
-  def state(command: CliCommand, store: FsmStore): IO[NodeState.Follower] = command match {
+  def state(command: CliCommand, store: Log): IO[NodeState.Follower] = command match {
     case c: CliCommand.Bootstrap =>
       logger.debug("initiating node state in bootstrap mode") >>
         bootstrap(c, store)
@@ -172,22 +172,22 @@ object Node {
         startup(c, store)
   }
 
-  private def bootstrap(command: CliCommand.Bootstrap, store: FsmStore): IO[NodeState.Follower] = {
-    val quorumNode =
-      QuorumNode(
+  private def bootstrap(command: CliCommand.Bootstrap, store: Log): IO[NodeState.Follower] = {
+    val member =
+      Member(
         id = command.id,
         peer = Some(Peer(host = command.host, port = command.port))
       )
     val localState =
       LocalState(
-        node = quorumNode.some,
+        node = member.some,
         currentTerm = 0L,
         votedFor = None,
       )
 
     for {
       _ <- store.bootstrap // clear all current store managed files
-      data = Quorum(nodes = command.quorumPeers :+ quorumNode).toByteString
+      data = Cluster(nodes = command.members :+ member).toByteString
       c <- store.append(LogEntry(index = 1L, term = 0L, tag = LogEntryTag.Conf, data = data))
       _ <- logger.debug(s"appended conf entry with result: $c")
       _ <- store.writeState(localState)
@@ -200,10 +200,10 @@ object Node {
     } yield nodeState
   }
 
-  private def startup(command: CliCommand.Startup, store: FsmStore): IO[NodeState.Follower] =
+  private def startup(command: CliCommand.Startup, store: Log): IO[NodeState.Follower] =
     for {
       localStateOption <- store.readState
-      quorumNode = QuorumNode(
+      quorumNode = Member(
         id = command.id,
         peer = Some(Peer(host = command.host, port = command.port))
       )

@@ -6,7 +6,7 @@ import trabica.rpc.TrabicaFs2Grpc
 
 object Grpc extends Networking {
 
-  private class GrpcClientNodeApi(val quorumId: String, val quorumPeer: Peer, client: TrabicaFs2Grpc[IO, Metadata]) extends NodeApi {
+  private class GrpcClientNodeApi(val memberId: String, val memberPeer: Peer, client: TrabicaFs2Grpc[IO, Metadata]) extends NodeApi {
 
     override def appendEntries(request: AppendEntriesRequest): IO[AppendEntriesResponse] =
       client.appendEntries(request, new Metadata)

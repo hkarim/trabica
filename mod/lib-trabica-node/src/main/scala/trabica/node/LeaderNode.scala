@@ -79,7 +79,7 @@ class LeaderNode(
                   c.appendEntries(request)
                     .timeout(rpcTimeout.milliseconds)
                     .attempt
-                    .flatMap(r => onAppendEntriesResponse(c.quorumPeer, None, r))
+                    .flatMap(r => onAppendEntriesResponse(c.memberPeer, None, r))
               }
             } yield responses
           }
@@ -124,7 +124,7 @@ class LeaderNode(
       .attempt
       .flatMap { response =>
         onAppendEntriesResponse(
-          client.quorumPeer,
+          client.memberPeer,
           Index.of(nextLogEntry.index).some,
           response
         )
@@ -139,7 +139,7 @@ class LeaderNode(
       .evalMap { _ =>
         for {
           currentState <- state.get
-          lastIndexOption = currentState.matchIndex.get(client.quorumPeer)
+          lastIndexOption = currentState.matchIndex.get(client.memberPeer)
         } yield lastIndexOption
       }
       .flatMap { lastIndexOption =>
@@ -222,7 +222,7 @@ class LeaderNode(
 
   private def onEntryAppended(peer: Peer, index: Index): IO[Unit] =
     for {
-      peers <- quorumPeers
+      peers <- clusterPeers
       peersLength = peers.length + 1 // counting ourselves
       majority = math.ceil(peersLength / 2) + 1
       re <- replicatedEntries.updateAndGet { re =>
@@ -255,17 +255,17 @@ class LeaderNode(
 
   override def addServer(request: AddServerRequest): IO[AddServerResponse] =
     for {
-      peers <- quorumPeers
+      peers <- clusterPeers
       node <- request.node
         .required(NodeError.ValueError(s"$prefix missing node in add server request"))
       peer <- node.peer
         .required(NodeError.ValueError(s"$prefix missing peer in add server request"))
       response <-
-        if peers.contains(peer) || peer.some == quorumNode.peer then
+        if peers.contains(peer) || peer.some == member.peer then
           logger.debug(s"$prefix peer ${peer.show} already exists") >>
             AddServerResponse(
               status = AddServerResponse.Status.OK,
-              leaderHint = quorumNode.some,
+              leaderHint = member.some,
             ).pure[IO]
         else
           logger.debug(s"$prefix peer ${peer.show} doesn't exist, attempt to add it") >>
@@ -274,17 +274,17 @@ class LeaderNode(
 
   override def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse] =
     for {
-      peers <- quorumPeers
+      peers <- clusterPeers
       node <- request.node
         .required(NodeError.ValueError(s"$prefix missing node in add server request"))
       peer <- node.peer
         .required(NodeError.ValueError(s"$prefix missing peer in add server request"))
       response <-
-        if !(peers.contains(peer) || peer.some == quorumNode.peer) then
+        if !(peers.contains(peer) || peer.some == member.peer) then
           logger.debug(s"$prefix peer ${peer.show} doesn't exist") >>
             RemoveServerResponse(
               status = RemoveServerResponse.Status.OK,
-              leaderHint = quorumNode.some,
+              leaderHint = member.some,
             ).pure[IO]
         else
           logger.debug(s"$prefix peer ${peer.show} exists, attempt to remove it") >>
@@ -332,7 +332,7 @@ class LeaderNode(
         } yield ()
     }
 
-  private def tryAddServer(node: QuorumNode, peer: Peer): IO[AddServerResponse] = {
+  private def tryAddServer(node: Member, peer: Peer): IO[AddServerResponse] = {
     def stream(client: NodeApi, fromIndex: Index): IO[Index] =
       context.store
         .streamFrom(fromIndex)
@@ -398,7 +398,7 @@ class LeaderNode(
         currentState <- state.get
         lastOption   <- context.store.last
         last = lastOption.getOrElse(LogEntry.defaultInstance)
-        q <- quorum
+        q <- cluster
         newQuorum = q.copy(nodes = q.nodes.appended(node).toVector.distinct)
         entry = LogEntry(
           index = last.index + 1L,
@@ -437,7 +437,7 @@ class LeaderNode(
             _ <- logger.debug(s"$prefix [add-server] returning response")
             response = AddServerResponse(
               status = AddServerResponse.Status.OK,
-              leaderHint = quorumNode.some,
+              leaderHint = member.some,
             )
           } yield response
         else
@@ -447,7 +447,7 @@ class LeaderNode(
           ) >>
             AddServerResponse(
               status = AddServerResponse.Status.Timeout,
-              leaderHint = quorumNode.some,
+              leaderHint = member.some,
             ).pure[IO]
     } yield response
 
@@ -471,18 +471,18 @@ class LeaderNode(
         logger.debug(s"$prefix add server error: ${e.getMessage}", e) >>
           AddServerResponse(
             status = AddServerResponse.Status.Timeout,
-            leaderHint = quorumNode.some,
+            leaderHint = member.some,
           ).pure[IO]
       }
   }
 
-  private def tryRemoveServer(node: QuorumNode): IO[RemoveServerResponse] = {
+  private def tryRemoveServer(node: Member): IO[RemoveServerResponse] = {
     def commit: IO[Unit] =
       for {
         currentState <- state.get
         lastOption   <- context.store.last
         last = lastOption.getOrElse(LogEntry.defaultInstance)
-        q <- quorum
+        q <- cluster
         newQuorum = q.copy(nodes = q.nodes.toVector.filterNot(_ == node))
         entry = LogEntry(
           index = last.index + 1L,
@@ -511,7 +511,7 @@ class LeaderNode(
       _ <- logger.debug(s"$prefix [remove-server] returning response")
       response = RemoveServerResponse(
         status = RemoveServerResponse.Status.OK,
-        leaderHint = quorumNode.some,
+        leaderHint = member.some,
       )
     } yield response
 

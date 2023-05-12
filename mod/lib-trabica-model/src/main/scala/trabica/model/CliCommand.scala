@@ -14,7 +14,7 @@ object CliCommand {
     host: String,
     port: Int,
     dataDirectory: String,
-    quorumPeers: Vector[QuorumNode],
+    members: Vector[Member],
   ) extends CliCommand
 
   private final def bootstrapOpts: Opts[Bootstrap] =
@@ -23,7 +23,7 @@ object CliCommand {
       val hostOpt  = Opts.option[String]("host", "node host")
       val portOpt  = Opts.option[Int]("port", "node port")
       val dirOpt   = Opts.option[String]("data", "data directory")
-      val nodesOpt = Opts.options[String]("peer", "quorum peer of the form id@host:port")
+      val nodesOpt = Opts.options[String]("peer", "member of the form id@host:port")
       (idOpt, hostOpt, portOpt, dirOpt, nodesOpt).mapN {
         case (id, host, port, dir, nodes) =>
           val quorumPeers = nodes.map { raw =>
@@ -32,7 +32,7 @@ object CliCommand {
             val address = split(1).split(":")
             val host    = address(0)
             val port    = address(1).toInt
-            QuorumNode(id = id, peer = Some(Peer(host = host, port = port)))
+            Member(id = id, peer = Some(Peer(host = host, port = port)))
           }
           Bootstrap(id, host, port, dir, quorumPeers.toList.toVector)
       }

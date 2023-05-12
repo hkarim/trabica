@@ -7,7 +7,7 @@ import com.typesafe.config.ConfigFactory
 import fs2.*
 import trabica.model.*
 import trabica.net.{Networking, NodeApi}
-import trabica.store.FsmStore
+import trabica.store.Log
 
 import scala.concurrent.duration.*
 
@@ -21,9 +21,9 @@ class Trabica(
 
   private final val logger = scribe.cats[IO]
 
-  override final val quorumId: String = context.quorumId
+  override final val memberId: String = context.quorumId
 
-  override final val quorumPeer: Peer = context.quorumPeer
+  override final val memberPeer: Peer = context.quorumPeer
 
   def run: IO[Unit] =
     eventStream
@@ -230,7 +230,7 @@ object Trabica {
       .replace()
   }.void
 
-  def run(supervisor: Supervisor[IO], command: CliCommand, store: FsmStore, networking: Networking): IO[Unit] =
+  def run(supervisor: Supervisor[IO], command: CliCommand, store: Log, networking: Networking): IO[Unit] =
     for {
       config    <- IO.blocking(ConfigFactory.load())
       _         <- logging(scribe.Level(config.getString("trabica.log.level")))

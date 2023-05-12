@@ -12,9 +12,9 @@ import java.nio.file.{Files, Path, StandardOpenOption}
 import java.util
 
 // very simple and quick FmsStore implementation, similar to an SS-Table
-object FsmFileStore {
+object FileStore {
 
-  private class StateFileStore(channel: FileChannel) {
+  private class StateStore(channel: FileChannel) {
 
     def bootstrap: IO[Unit] =
       IO.blocking(channel.truncate(0L)).void
@@ -61,7 +61,7 @@ object FsmFileStore {
       }
   }
 
-  private class ConfFileStore(channel: FileChannel) {
+  private class ConfStore(channel: FileChannel) {
 
     def bootstrap: IO[Unit] =
       IO.blocking(channel.truncate(0L)).void
@@ -116,7 +116,7 @@ object FsmFileStore {
       }
   }
 
-  private class IndexFileStore(writeChannel: FileChannel, readChannel: FileChannel) {
+  private class IndexStore(writeChannel: FileChannel, readChannel: FileChannel) {
 
     def bootstrap: IO[Unit] =
       IO.blocking(writeChannel.truncate(0L)).void
@@ -177,13 +177,13 @@ object FsmFileStore {
 
   }
 
-  private class FsmFileStore(
+  private class LogStore(
     writeChannel: FileChannel,
     readChannel: FileChannel,
-    stateStore: StateFileStore,
-    indexStore: IndexFileStore,
-    confStore: ConfFileStore,
-  ) extends FsmStore {
+    stateStore: StateStore,
+    indexStore: IndexStore,
+    confStore: ConfStore,
+  ) extends Log {
 
     override def bootstrap: IO[Unit] =
       for {
@@ -371,7 +371,7 @@ object FsmFileStore {
 
   }
 
-  def resource(dataDirectory: String): Resource[IO, FsmStore] = {
+  def resource(dataDirectory: String): Resource[IO, Log] = {
     val rootPath  = Path.of(dataDirectory)
     val indexPath = rootPath.resolve("index.trabica").normalize
     val logPath   = rootPath.resolve("log.trabica").normalize
@@ -413,15 +413,15 @@ object FsmFileStore {
 
     for {
       confReadWrite <- confChannel
-      confStore = new ConfFileStore(confReadWrite)
+      confStore = new ConfStore(confReadWrite)
       stateReadWrite <- stateChannel
-      stateStore = new StateFileStore(stateReadWrite)
+      stateStore = new StateStore(stateReadWrite)
       indexWrite <- indexWriteChannel
       indexRead  <- indexReadChannel
-      indexStore = new IndexFileStore(indexWrite, indexRead)
+      indexStore = new IndexStore(indexWrite, indexRead)
       logWrite <- logWriteChannel
       logRead  <- logReadChannel
-      logStore = new FsmFileStore(logWrite, logRead, stateStore, indexStore, confStore)
+      logStore = new LogStore(logWrite, logRead, stateStore, indexStore, confStore)
     } yield logStore
   }
 }

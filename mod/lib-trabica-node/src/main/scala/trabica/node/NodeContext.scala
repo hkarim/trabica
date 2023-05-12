@@ -5,7 +5,7 @@ import cats.effect.{IO, Ref}
 import com.typesafe.config.Config
 import trabica.model.{Event, MessageId, Peer}
 import trabica.net.Networking
-import trabica.store.FsmStore
+import trabica.store.Log
 
 case class NodeContext(
   config: Config,
@@ -13,7 +13,7 @@ case class NodeContext(
   networking: Networking,
   events: Queue[IO, Event],
   supervisor: Supervisor[IO],
-  store: FsmStore,
+  store: Log,
   quorumId: String,
   quorumPeer: Peer,
 )

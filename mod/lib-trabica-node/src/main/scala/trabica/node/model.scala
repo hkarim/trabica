@@ -13,11 +13,11 @@ object Interrupt {
 }
 
 extension (self: LogEntry) {
-  def quorum: IO[Option[Quorum]] =
+  def cluster: IO[Option[Cluster]] =
     if self.tag == LogEntryTag.Conf then {
       IO.delay {
         Some(
-          Quorum.parseFrom(CodedInputStream.newInstance(self.data.asReadOnlyByteBuffer()))
+          Cluster.parseFrom(CodedInputStream.newInstance(self.data.asReadOnlyByteBuffer()))
         )
       }
     } else IO.pure(None)
@@ -40,7 +40,7 @@ extension [S <: NodeState](self: S) {
 
 given Show[NodeApi] with {
   override def show(instance: NodeApi): String =
-    s"${instance.quorumPeer.host}:${instance.quorumPeer.port}"
+    s"${instance.memberPeer.host}:${instance.memberPeer.port}"
 }
 
 given Show[Peer] with {
@@ -62,8 +62,8 @@ given Show[Map[Peer, Index]] with {
     }.mkString("[", ", ", "]")
 }
 
-given Show[QuorumNode] with {
-  override def show(instance: QuorumNode): String =
+given Show[Member] with {
+  override def show(instance: Member): String =
     s"${instance.id}@${instance.peer.map(_.host).getOrElse("unknown")}:${instance.peer.map(_.port).getOrElse(0)}"
 }
 

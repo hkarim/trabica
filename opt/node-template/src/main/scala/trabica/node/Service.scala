@@ -7,7 +7,7 @@ import com.monovore.decline.Opts
 import com.monovore.decline.effect.CommandIOApp
 import trabica.model.{CliCommand, LogEntry, LogEntryTag}
 import trabica.net.Grpc
-import trabica.store.{FsmFileStore, FsmStore}
+import trabica.store.{FileStore, Log}
 
 import scala.concurrent.duration.*
 
@@ -16,7 +16,7 @@ object Service
 
   private val logger = scribe.cats[IO]
 
-  private def feed(store: FsmStore): IO[Unit] =
+  private def feed(store: Log): IO[Unit] =
     fs2.Stream
       .range(2, 20, 1)
       .delayBy[IO](2.seconds)
@@ -37,7 +37,7 @@ object Service
   override def main: Opts[IO[ExitCode]] =
     CliCommand.parse.map { command =>
       Supervisor[IO](await = false).use { supervisor =>
-        FsmFileStore.resource(command.dataDirectory).use { store =>
+        FileStore.resource(command.dataDirectory).use { store =>
           val feedIO = command match {
             case _: CliCommand.Bootstrap =>
               feed(store)

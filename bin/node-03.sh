@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-mod/node-template/target/universal/stage/bin/node-template -- \
+opt/node-template/target/universal/stage/bin/node-template -- \
 startup \
 --id 03 \
 --host 0.0.0.0 \

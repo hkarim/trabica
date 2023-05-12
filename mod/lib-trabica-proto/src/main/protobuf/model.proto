@@ -9,23 +9,23 @@ message Peer {
   int32 port = 2;
 }
 
-message QuorumNode {
+message Member {
   string id = 1;
   Peer peer = 2;
 }
 
 message LocalState {
-  QuorumNode node = 1;
+  Member node = 1;
   int64 currentTerm = 2;
-  QuorumNode votedFor = 3;
+  Member votedFor = 3;
 }
 
-message Quorum {
-  repeated QuorumNode nodes = 1;
+message Cluster {
+  repeated Member nodes = 1;
 }
 
 message Header {
-  QuorumNode node = 1;
+  Member node = 1;
   int64 messageId = 2;
   int64 term = 3;
 }
@@ -67,7 +67,7 @@ message VoteResponse {
 }
 
 message AddServerRequest {
-  QuorumNode node = 1;
+  Member node = 1;
 }
 
 message AddServerResponse {
@@ -77,11 +77,11 @@ message AddServerResponse {
     OK = 2;
   }
   Status status = 1;
-  optional QuorumNode leaderHint = 2;
+  optional Member leaderHint = 2;
 }
 
 message RemoveServerRequest {
-  QuorumNode node = 1;
+  Member node = 1;
 }
 
 message RemoveServerResponse {
@@ -90,7 +90,7 @@ message RemoveServerResponse {
     OK = 1;
   }
   Status status = 1;
-  optional QuorumNode leaderHint = 2;
+  optional Member leaderHint = 2;
 }
 
 message StepDownRequest {

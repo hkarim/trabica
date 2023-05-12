@@ -115,16 +115,16 @@ class CandidateNode(
   private def onVote(client: NodeApi, response: Either[Throwable, VoteResponse]): IO[Unit] =
     response match {
       case Left(e) =>
-        val peer = client.quorumPeer
+        val peer = client.memberPeer
         logger.debug(
           s"$prefix vote response error from peer ${peer.show}",
           s"${e.getMessage}, ignoring"
         )
       case Right(VoteResponse(Some(_), true, _)) =>
-        val peer = client.quorumPeer
+        val peer = client.memberPeer
         for {
           _     <- logger.debug(s"$prefix vote granted from peer ${peer.show}")
-          peers <- quorumPeers
+          peers <- clusterPeers
           peersLength = peers.length + 1 // counting ourselves
           _ <- state.flatModify { currentState =>
             val votes            = (currentState.votes + client.quorumNode).toVector
@@ -135,7 +135,7 @@ class CandidateNode(
             // thus preventing unnecessary node transition more than once
             val io = for {
               _ <- logger.debug(s"$prefix votes reached ${votes.length} of total $peersLength")
-              matchIndex <- quorum.map { q =>
+              matchIndex <- cluster.map { q =>
                 q.nodes
                   .toVector
                   .filterNot(_.id == context.quorumId)
@@ -151,7 +151,7 @@ class CandidateNode(
 
               newState = NodeState.Leader(
                 localState = LocalState(
-                  node = quorumNode.some,
+                  node = member.some,
                   currentTerm = currentState.localState.currentTerm,
                   votedFor = None,
                 ),
@@ -179,7 +179,7 @@ class CandidateNode(
           }
         } yield ()
       case Right(VoteResponse(Some(header), false, _)) =>
-        val peer = client.quorumPeer
+        val peer = client.memberPeer
         for {
           _            <- logger.debug(s"$prefix vote denied from peer ${peer.show}")
           currentState <- state.get
