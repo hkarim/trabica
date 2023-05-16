@@ -69,7 +69,7 @@ trait Node[S <: NodeState] {
   def removeServer(request: RemoveServerRequest): IO[RemoveServerResponse]
 
   def member: Member =
-    Member(id = context.quorumId, peer = context.quorumPeer.some)
+    Member(id = context.memberId, peer = context.memberPeer.some)
 
   def makeHeader: IO[Header] =
     for {
@@ -95,7 +95,7 @@ trait Node[S <: NodeState] {
   def makeFollowerState(currentState: NodeState, term: Long, leader: Option[Member]): NodeState.Follower =
     NodeState.Follower(
       localState = LocalState(
-        node = Member(id = context.quorumId, peer = Some(context.quorumPeer)).some,
+        node = Member(id = context.memberId, peer = Some(context.memberPeer)).some,
         currentTerm = term,
         votedFor = None,
       ),
@@ -119,14 +119,14 @@ trait Node[S <: NodeState] {
   def clusterPeers: IO[Vector[Peer]] =
     for {
       q <- cluster
-      ns = q.nodes.toVector.filterNot(_.id == context.quorumId)
+      ns = q.nodes.toVector.filterNot(_.id == context.memberId)
       ps <- ns.traverse(n => n.peer.required(NodeError.StoreError("peers not found")))
     } yield ps
 
   def clients: Resource[IO, Vector[NodeApi]] =
     for {
       q <- Resource.eval(cluster)
-      ns = q.nodes.toVector.filterNot(_.id == context.quorumId)
+      ns = q.nodes.toVector.filterNot(_.id == context.memberId)
       clients <- ns.traverse { n =>
         for {
           p <- Resource.eval(n.peer.required(NodeError.StoreError(s"$prefix peer is required")))

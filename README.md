@@ -49,8 +49,8 @@ is the node id.
 
 ## Notes
 - The store implementation is just an example, a more robust store is needed in production situations
-- A call to `RemoveServer` will aggressively send a termination signal to this server is removal was successful, which will terminate the node process
-- Delivering (applying) messages to the FSM is not yet implemented
+- A call to `RemoveServer` will aggressively send a termination signal to this server if removal was successful, which will terminate the node process
+- Delivering (applying) messages to the FSM is not implemented yet
 
 
 ## License

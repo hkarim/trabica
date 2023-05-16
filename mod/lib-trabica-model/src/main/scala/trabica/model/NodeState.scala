@@ -6,7 +6,7 @@ enum NodeStateTag {
   case Leader
 }
 
-sealed trait NodeState { self =>
+sealed trait NodeState {
   def localState: LocalState
   def commitIndex: Index
   def lastApplied: Index
@@ -43,7 +43,7 @@ object NodeState {
     nextIndex: Map[Peer, Index],
     matchIndex: Map[Peer, Index],
   ) extends NodeState {
-    override val tag: NodeStateTag          = NodeStateTag.Leader
+    override val tag: NodeStateTag      = NodeStateTag.Leader
     override val leader: Option[Member] = localState.node
   }
 

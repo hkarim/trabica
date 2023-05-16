@@ -21,9 +21,9 @@ class Trabica(
 
   private final val logger = scribe.cats[IO]
 
-  override final val memberId: String = context.quorumId
+  override final val memberId: String = context.memberId
 
-  override final val memberPeer: Peer = context.quorumPeer
+  override final val memberPeer: Peer = context.memberPeer
 
   def run: IO[Unit] =
     eventStream
@@ -236,10 +236,10 @@ object Trabica {
       _         <- logging(scribe.Level(config.getString("trabica.log.level")))
       messageId <- Ref.of[IO, MessageId](MessageId.zero)
       state     <- Node.state(command, store)
-      quorumNode <- state.localState.node.required(
+      memberNode <- state.localState.node.required(
         NodeError.StoreError("`localState.node` configuration not found in local state")
       )
-      quorumPeer <- quorumNode.peer.required(
+      memberPeer <- memberNode.peer.required(
         NodeError.StoreError("`localState.node.peer` configuration not found in local state")
       )
       events <- Queue.unbounded[IO, Event]
@@ -250,8 +250,8 @@ object Trabica {
         events = events,
         supervisor = supervisor,
         store = store,
-        quorumId = quorumNode.id,
-        quorumPeer = quorumPeer,
+        memberId = memberNode.id,
+        memberPeer = memberPeer,
       )
       trace          <- Ref.of[IO, NodeTrace](NodeTrace.instance)
       node           <- Node.instance(context, trace, state)
@@ -262,7 +262,7 @@ object Trabica {
       _ <- node.run.supervise(supervisor)
       _ <- logger.info(s"starting up in mode follower")
       _ <- trabica.run.supervise(supervisor)
-      _ <- networking.server(trabica, quorumPeer.host, quorumPeer.port).use { _ =>
+      _ <- networking.server(trabica, memberPeer.host, memberPeer.port).use { _ =>
         shutdownSignal.get
       }
     } yield ()
