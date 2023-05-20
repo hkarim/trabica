@@ -138,7 +138,7 @@ class CandidateNode(
               matchIndex <- cluster.map { q =>
                 q.nodes
                   .toVector
-                  .filterNot(_.id == context.quorumId)
+                  .filterNot(_.id == context.memberId)
                   .foldLeft(Map.empty[Peer, Index]) { (m, next) =>
                     next.peer match {
                       case Some(p) =>

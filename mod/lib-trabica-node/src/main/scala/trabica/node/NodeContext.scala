@@ -14,6 +14,6 @@ case class NodeContext(
   events: Queue[IO, Event],
   supervisor: Supervisor[IO],
   store: Log,
-  quorumId: String,
-  quorumPeer: Peer,
+  memberId: String,
+  memberPeer: Peer,
 )
