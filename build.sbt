@@ -15,7 +15,7 @@ lazy val fullScalaOptions =
   )
 
 lazy val commonSettings = List(
-  organization                    := s"io.hk",
+  organization                    := s"com.github.com.hkarim",
   scalaVersion                    := Lib.Version.scala,
   version                         := Lib.Version.service,
   Compile / packageDoc / mappings := Seq.empty,
