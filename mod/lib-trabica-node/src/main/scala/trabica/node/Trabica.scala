@@ -13,7 +13,7 @@ import scala.concurrent.duration.*
 
 class Trabica(
   val context: NodeContext,
-  val ref: Ref[IO, Node[_ <: NodeState]],
+  val ref: Ref[IO, Node[? <: NodeState]],
   val mutex: Mutex[IO],
   val shutdownSignal: Interrupt,
   val trace: Ref[IO, NodeTrace],
@@ -255,7 +255,7 @@ object Trabica {
       )
       trace          <- Ref.of[IO, NodeTrace](NodeTrace.instance)
       node           <- Node.instance(context, trace, state)
-      ref            <- Ref.of[IO, Node[_ <: NodeState]](node)
+      ref            <- Ref.of[IO, Node[? <: NodeState]](node)
       mutex          <- Mutex[IO]
       shutdownSignal <- Interrupt.instance
       trabica = new Trabica(context, ref, mutex, shutdownSignal, trace)

@@ -1,12 +1,16 @@
-lazy val commonScalaOptions = List(
+lazy val minimalScalaOptions = List(
   "-deprecation",
   "-encoding",
   "utf-8",
   //"-explaintypes",
   "-feature",
   "-no-indent",
-  "-Xfatal-warnings",
   "-Wunused:all",
+)
+
+lazy val commonScalaOptions =
+  minimalScalaOptions ++ List(
+  "-Xfatal-warnings",
 )
 
 lazy val fullScalaOptions =
@@ -39,7 +43,7 @@ lazy val `lib-trabica-proto` = project
   .in(file("mod/lib-trabica-proto"))
   .enablePlugins(Fs2Grpc)
   .settings(commonSettings)
-  .settings(scalacOptions ++= commonScalaOptions)
+  .settings(scalacOptions ++= minimalScalaOptions)
   .settings(PB.protocVersion := Lib.Version.protocVersion)
   .settings(
     name := "lib-trabica-proto",
@@ -82,7 +86,7 @@ lazy val `lib-trabica-rpc` = project
   .in(file("mod/lib-trabica-rpc"))
   .enablePlugins(Fs2Grpc)
   .settings(commonSettings)
-  .settings(scalacOptions ++= commonScalaOptions)
+  .settings(scalacOptions ++= minimalScalaOptions)
   .settings(PB.protocVersion := Lib.Version.protocVersion)
   .settings(
     name := "lib-trabica-rpc",

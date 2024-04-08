@@ -2,15 +2,15 @@ import sbt.*
 
 object Lib {
   object Version {
-    val scala         = "3.3.0-RC6"
+    val scala         = "3.4.1"
     val service       = "0.1.0-SNAPSHOT"
-    val config        = "1.4.2"
-    val catsEffect    = "3.5.0"
-    val circe         = "0.14.5"
-    val fs2           = "3.7.0"
+    val config        = "1.4.3"
+    val catsEffect    = "3.5.4"
+    val circe         = "0.14.6"
+    val fs2           = "3.10.0"
     val decline       = "2.4.1"
-    val scribe        = "3.11.3"
-    val protocVersion = "3.22.0"
+    val scribe        = "3.13.2"
+    val protocVersion = "3.25.3"
 
   }
 
